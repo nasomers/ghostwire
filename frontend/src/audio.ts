@@ -292,7 +292,7 @@ export class AudioEngine {
       oscillator: { type: 'sine' },
       envelope: { attack: 0.5, decay: 2, sustain: 0.1, release: 4 },
       volume: -14,
-      maxPolyphony: 16,
+      maxPolyphony: 32,
     });
     this.spectralSynth.connect(this.voidReverb);
 
@@ -634,7 +634,7 @@ export class AudioEngine {
   playRansomwareVictim(victim: RansomwareVictim) {
     if (!this.initialized) return;
     try {
-      const now = Tone.now() + 0.01; // Small offset to ensure future scheduling
+      const now = Tone.now() + 0.05; // Larger offset to ensure future scheduling
 
       // Maximum tension
       this.addTension(5);
@@ -653,10 +653,8 @@ export class AudioEngine {
       // Metallic crash
       this.metallicSynth.triggerAttackRelease('2n', now);
 
-      // Cascading glitches
-      for (let i = 0; i < 5; i++) {
-        this.glitchSynth.triggerAttackRelease('32n', now + 0.05 + i * 0.1);
-      }
+      // Single glitch burst (NoiseSynth is monophonic, avoid scheduling conflicts)
+      this.glitchSynth.triggerAttackRelease('8n', now + 0.1);
 
       // Filter sweep for impact
       this.darkFilter.frequency.rampTo(2000, 0.1, now);
