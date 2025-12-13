@@ -236,6 +236,8 @@ export class AudioEngine {
   private lastTensionValue = 0;
   private tensionRiseRate = 0;
   private buildUpActive = false;
+  private lastBuildUpTime = 0;
+  private buildUpCooldown = 45000; // 45 seconds between build-ups
   private dropPending = false;
   private lastDropTime = 0;
   private dropCooldown = 30000; // 30 seconds between drops
@@ -1086,9 +1088,13 @@ export class AudioEngine {
     this.tensionRiseRate = (this.globalTension - this.lastTensionValue) / 0.2; // Per 200ms
     this.lastTensionValue = this.globalTension;
 
-    // Build-up detection - tension rising rapidly
-    if (this.tensionRiseRate > 0.05 && this.globalTension > 0.3 && !this.buildUpActive) {
-      this.triggerBuildUp();
+    // Build-up detection - tension rising rapidly (with cooldown to avoid constant triggering)
+    const now = Date.now();
+    if (this.tensionRiseRate > 0.1 && this.globalTension > 0.4 && !this.buildUpActive) {
+      if (now - this.lastBuildUpTime > this.buildUpCooldown) {
+        this.triggerBuildUp();
+        this.lastBuildUpTime = now;
+      }
     }
 
     // Drop detection - tension was high and is now falling
