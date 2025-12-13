@@ -61,6 +61,9 @@ interface DataFragment {
   scale: number;
   rotation: number;
   rotationSpeed: number;
+  sourcePosition?: THREE.Vector3;  // For connection line
+  mesh?: THREE.Mesh;               // Direct mesh reference for billboard
+  connectionLine?: THREE.Line;     // Line connecting to source
 }
 
 interface TrailPoint {
@@ -521,6 +524,67 @@ const FORMATIONS: Formation[] = [
     cameraDistance: 150,
     rotationSpeed: 0.012,
   },
+
+  // 11. Living Icosahedron - breathing geometric shell
+  {
+    name: 'ICOSAHEDRON',
+    generate: (count, spread) => {
+      const positions: THREE.Vector3[] = [];
+      // Icosahedron vertices + edge interpolation
+      const phi = (1 + Math.sqrt(5)) / 2;
+      const icoVerts = [
+        [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+        [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+        [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1],
+      ];
+      // Icosahedron edges (20 faces, 30 edges)
+      const edges = [
+        [0, 11], [0, 5], [0, 1], [0, 7], [0, 10],
+        [1, 5], [5, 11], [11, 10], [10, 7], [7, 1],
+        [3, 9], [3, 4], [3, 2], [3, 6], [3, 8],
+        [4, 9], [2, 4], [6, 2], [8, 6], [9, 8],
+        [4, 5], [2, 11], [6, 10], [8, 7], [9, 1],
+        [4, 11], [2, 10], [6, 7], [8, 1], [9, 5],
+      ];
+      const scale = spread * 0.65;
+      // Place particles on vertices and along edges
+      const particlesPerEdge = Math.floor((count - 12) / 30);
+      // Vertices
+      for (const v of icoVerts) {
+        positions.push(new THREE.Vector3(v[0] * scale, v[1] * scale, v[2] * scale));
+      }
+      // Edge particles
+      for (const [a, b] of edges) {
+        const va = icoVerts[a];
+        const vb = icoVerts[b];
+        for (let i = 1; i <= particlesPerEdge; i++) {
+          const t = i / (particlesPerEdge + 1);
+          positions.push(new THREE.Vector3(
+            (va[0] + (vb[0] - va[0]) * t) * scale,
+            (va[1] + (vb[1] - va[1]) * t) * scale,
+            (va[2] + (vb[2] - va[2]) * t) * scale
+          ));
+        }
+      }
+      // Fill remaining with random points inside
+      while (positions.length < count) {
+        const theta = Math.random() * Math.PI * 2;
+        const phi = Math.acos(2 * Math.random() - 1);
+        const r = spread * 0.3 * Math.cbrt(Math.random());
+        positions.push(new THREE.Vector3(
+          r * Math.sin(phi) * Math.cos(theta),
+          r * Math.sin(phi) * Math.sin(theta),
+          r * Math.cos(phi)
+        ));
+      }
+      return positions;
+    },
+    connectionStyle: 'proximity',
+    connectionDistance: 30,
+    particleSize: 1.5,
+    cameraDistance: 180,
+    rotationSpeed: 0.015,
+  },
 ];
 
 // === TRIPPY POST-PROCESSING SHADER ===
@@ -633,7 +697,7 @@ export class VisualEngine {
   private dataFragments: DataFragment[] = [];
   private dataFragmentMeshes: THREE.Group;
   private fragmentPool: THREE.Mesh[] = [];
-  private maxFragments = 60;
+  private maxFragments = 20;  // Reduced for readability
 
   // Particle trails
   private trailPoints: TrailPoint[] = [];
@@ -659,6 +723,30 @@ export class VisualEngine {
   private visualizerHue = 180;
   private visualizerSaturation = 70;
 
+  // Data Stream Rain (2D canvas behind 3D scene)
+  private dataStreamCanvas!: HTMLCanvasElement;
+  private dataStreamCtx!: CanvasRenderingContext2D;
+  private dataStreamColumns: Array<{
+    x: number;
+    y: number;
+    speed: number;
+    chars: string[];
+    length: number;
+    brightness: number;
+    targetBrightness: number;
+  }> = [];
+  private dataStreamItems = [
+    // Ports
+    ':22', ':23', ':25', ':53', ':80', ':110', ':143', ':443', ':445', ':993', ':995',
+    ':1433', ':1521', ':3306', ':3389', ':5432', ':5900', ':6379', ':8080', ':8443', ':27017',
+    // Protocols
+    'SSH', 'FTP', 'SMTP', 'DNS', 'HTTP', 'HTTPS', 'SMB', 'RDP', 'MYSQL', 'MSSQL',
+    'TOR', 'IRC', 'TELNET', 'REDIS', 'MONGO', 'POP3', 'IMAP', 'VNC', 'LDAP', 'NTP',
+    // Threat indicators
+    'SYN', 'ACK', 'RST', 'PSH', 'FIN', 'NULL', 'XMAS', 'SCAN', 'PROBE', 'FLOOD',
+  ];
+  private dataStreamDensity = 0.6;  // 0-1, scales with activity
+
   // Data packets traveling along lines
   private dataPackets: DataPacket[] = [];
   private packetGeometry!: THREE.BufferGeometry;
@@ -672,15 +760,57 @@ export class VisualEngine {
   private rotationAngle = 0;
   private dominantColor = new THREE.Color(currentTheme.void);
 
+  // Unified breathing - shared pulse for all elements
+  private globalBreathPhase = 0;
+  private globalBreathScale = 1;  // Current breath scale (0.97 - 1.03 range)
+
   // Holographic HUD panels
   private hudPanels: HUDPanel[] = [];
   private hudGroup: THREE.Group = new THREE.Group();
   private hudStats: Record<string, string | number> = {
-    status: 'Connecting',
-    nodes: 0,
-    tension: 0,
-    threats: 0,
+    threatLevel: 1,
+    ransomware: 0,
+    eventsPerMin: 0,
+    breaches: '0',
   };
+
+  // Living Icosahedron mesh
+  private icoMesh!: THREE.LineSegments;
+  private icoGeometry!: THREE.BufferGeometry;
+  private icoMaterial!: THREE.LineBasicMaterial;
+  private icoBasePositions!: Float32Array;
+  private icoVertexDisplacement: number[] = [];
+  private icoSubdivisionLevel = 0;
+  private icoBreathPhase = 0;
+  private icoBreathScale = 1;
+  private icoTargetSubdivision = 0;
+  private icoActivityAccumulator = 0;
+  private icoRegionActivity: number[] = []; // Activity per vertex region
+
+  // Morphing container - icosahedron adapts to formation
+  private icoMorphTargets!: Float32Array;  // Target positions for current formation
+  private icoMorphProgress = 0;            // 0-1 morph interpolation
+
+  // Energy conduit lines - connections from icosahedron to particles
+  private conduitGeometry!: THREE.BufferGeometry;
+  private conduitMaterial!: THREE.LineBasicMaterial;
+  private conduitLines!: THREE.LineSegments;
+  private conduitMaxLines = 60;            // Max connections
+
+  // Dissolve/reform effect
+  private icoDissolveProgress = 0;         // 0 = solid, 1 = fully dissolved
+  private icoDissolving = false;
+  private icoReforming = false;
+  private dissolvedParticles: Array<{pos: THREE.Vector3, vel: THREE.Vector3, target: THREE.Vector3}> = [];
+
+  // Tesseract for glitch moments
+  private tesseractMesh!: THREE.LineSegments;
+  private tesseractGeometry!: THREE.BufferGeometry;
+  private tesseractMaterial!: THREE.LineBasicMaterial;
+  private tesseractRotation4D = { xy: 0, xz: 0, xw: 0, yz: 0, yw: 0, zw: 0 };
+  private tesseractActive = false;
+  private tesseractIntensity = 0;
+  private tesseractDisruptionPhase = 0; // For disruption wave animation
 
   // Camera
   private cameraTarget = new THREE.Vector3(0, 0, 0);
@@ -706,22 +836,104 @@ export class VisualEngine {
     this.labelContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:100;overflow:hidden;';
     document.body.appendChild(this.labelContainer);
 
-    // Formation label
+    // Glitch GHOSTWIRE title
     this.formationLabel = document.createElement('div');
-    this.formationLabel.id = 'formation-label';
+    this.formationLabel.id = 'ghostwire-glitch';
+    this.formationLabel.innerHTML = `
+      <span class="glitch-text" data-text="GHOSTWIRE">GHOSTWIRE</span>
+    `;
     this.formationLabel.style.cssText = `
       position: fixed;
-      bottom: 80px;
+      bottom: 70px;
       left: 50%;
       transform: translateX(-50%);
       font-family: 'JetBrains Mono', monospace;
-      font-size: 10px;
-      letter-spacing: 3px;
-      color: rgba(100, 200, 255, 0.5);
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 8px;
+      color: rgba(0, 255, 200, 0.7);
       pointer-events: none;
       z-index: 101;
-      transition: opacity 0.5s;
+      text-shadow: 0 0 10px rgba(0, 255, 200, 0.5);
     `;
+
+    // Add glitch CSS animation
+    const glitchStyle = document.createElement('style');
+    glitchStyle.textContent = `
+      #ghostwire-glitch .glitch-text {
+        position: relative;
+        display: inline-block;
+        animation: glitch-skew 4s infinite linear alternate-reverse;
+      }
+      #ghostwire-glitch .glitch-text::before,
+      #ghostwire-glitch .glitch-text::after {
+        content: attr(data-text);
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0.8;
+      }
+      #ghostwire-glitch .glitch-text::before {
+        animation: glitch-1 3s infinite linear alternate-reverse;
+        clip-path: polygon(0 0, 100% 0, 100% 35%, 0 35%);
+        color: rgba(255, 0, 100, 0.7);
+        text-shadow: -2px 0 rgba(255, 0, 100, 0.5);
+      }
+      #ghostwire-glitch .glitch-text::after {
+        animation: glitch-2 2s infinite linear alternate-reverse;
+        clip-path: polygon(0 65%, 100% 65%, 100% 100%, 0 100%);
+        color: rgba(0, 200, 255, 0.7);
+        text-shadow: 2px 0 rgba(0, 200, 255, 0.5);
+      }
+      @keyframes glitch-1 {
+        0%, 92% { transform: translate(0); opacity: 0.8; }
+        92.5% { transform: translate(-3px, 1px); opacity: 1; }
+        93% { transform: translate(2px, -1px); opacity: 0.9; }
+        93.5% { transform: translate(-1px, 2px); opacity: 1; }
+        94% { transform: translate(0); opacity: 0.8; }
+        96%, 100% { transform: translate(0); opacity: 0.8; }
+      }
+      @keyframes glitch-2 {
+        0%, 94% { transform: translate(0); opacity: 0.8; }
+        94.5% { transform: translate(2px, -1px); opacity: 1; }
+        95% { transform: translate(-3px, 1px); opacity: 0.9; }
+        95.5% { transform: translate(1px, -2px); opacity: 1; }
+        96% { transform: translate(0); opacity: 0.8; }
+        98%, 100% { transform: translate(0); opacity: 0.8; }
+      }
+      @keyframes glitch-skew {
+        0%, 96% { transform: skew(0deg); }
+        97% { transform: skew(2deg); }
+        98% { transform: skew(-1deg); }
+        99% { transform: skew(1deg); }
+        100% { transform: skew(0deg); }
+      }
+      #ghostwire-glitch.high-tension .glitch-text::before {
+        animation: glitch-1-intense 0.5s infinite linear alternate-reverse;
+      }
+      #ghostwire-glitch.high-tension .glitch-text::after {
+        animation: glitch-2-intense 0.3s infinite linear alternate-reverse;
+      }
+      @keyframes glitch-1-intense {
+        0%, 70% { transform: translate(0); opacity: 0.8; }
+        75% { transform: translate(-4px, 2px); opacity: 1; }
+        80% { transform: translate(3px, -2px); opacity: 0.9; }
+        85% { transform: translate(-2px, 3px); opacity: 1; }
+        90% { transform: translate(0); opacity: 0.8; }
+        100% { transform: translate(0); opacity: 0.8; }
+      }
+      @keyframes glitch-2-intense {
+        0%, 60% { transform: translate(0); opacity: 0.8; }
+        65% { transform: translate(3px, -2px); opacity: 1; }
+        70% { transform: translate(-4px, 2px); opacity: 0.9; }
+        75% { transform: translate(2px, -3px); opacity: 1; }
+        80% { transform: translate(0); opacity: 0.8; }
+        100% { transform: translate(0); opacity: 0.8; }
+      }
+    `;
+    document.head.appendChild(glitchStyle);
     document.body.appendChild(this.formationLabel);
 
     // Scene
@@ -754,9 +966,9 @@ export class VisualEngine {
 
     this.bloomPass = new UnrealBloomPass(
       new THREE.Vector2(window.innerWidth, window.innerHeight),
-      this.isMobileDevice ? 1.5 : 2.0,
-      0.5,
-      0.2
+      this.isMobileDevice ? 0.6 : 0.8,  // Reduced further
+      0.2,   // Tighter radius
+      0.55   // Higher threshold - only very bright things bloom
     );
     this.composer.addPass(this.bloomPass);
 
@@ -768,12 +980,13 @@ export class VisualEngine {
     this.initRendering();
     this.initTrails();
     this.initDataRain();
+    // Data stream disabled - interfering with rendering
+    // this.initDataStream();
     this.initVisualizer();
     this.initPackets();
+    this.initIcosahedron();
+    this.initTesseract();
     this.initHUD();
-
-    // Show initial formation name
-    this.showFormationName();
 
     window.addEventListener('resize', this.onResize.bind(this));
 
@@ -975,7 +1188,8 @@ export class VisualEngine {
         uniform float tension;
         varying vec3 vColor;
         void main() {
-          gl_FragColor = vec4(vColor * (1.5 + tension * 0.8), 0.5 + tension * 0.3);
+          // Reduced brightness to prevent bloom blowout (was 1.5 + tension * 0.8)
+          gl_FragColor = vec4(vColor * (0.6 + tension * 0.25), 0.2 + tension * 0.1);
         }
       `,
       transparent: true,
@@ -1100,6 +1314,55 @@ export class VisualEngine {
     this.scene.add(this.rainPoints);
   }
 
+  private initDataStream() {
+    // Create 2D canvas behind the 3D scene for Matrix-style data rain
+    this.dataStreamCanvas = document.createElement('canvas');
+    this.dataStreamCanvas.id = 'data-stream';
+    this.dataStreamCanvas.width = window.innerWidth;
+    this.dataStreamCanvas.height = window.innerHeight;
+    this.dataStreamCanvas.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+      opacity: 0.4;
+    `;
+    // Insert before the main canvas so it's behind
+    document.body.insertBefore(this.dataStreamCanvas, document.body.firstChild);
+    this.dataStreamCtx = this.dataStreamCanvas.getContext('2d')!;
+
+    // Initialize columns - wider spacing for text items
+    const columnWidth = 55;
+    const columnCount = Math.ceil(window.innerWidth / columnWidth);
+
+    for (let i = 0; i < columnCount; i++) {
+      // Not all columns active initially
+      if (Math.random() > 0.7) {
+        const length = 8 + Math.floor(Math.random() * 12);
+        this.dataStreamColumns.push({
+          x: i * columnWidth,
+          y: Math.random() * -400,  // Start above screen
+          speed: 50 + Math.random() * 80,  // pixels per second
+          chars: this.generateStreamItems(length),
+          length: length,
+          brightness: 0.3 + Math.random() * 0.4,
+          targetBrightness: 0.3 + Math.random() * 0.4,
+        });
+      }
+    }
+  }
+
+  private generateStreamItems(length: number): string[] {
+    const items: string[] = [];
+    for (let i = 0; i < length; i++) {
+      items.push(this.dataStreamItems[Math.floor(Math.random() * this.dataStreamItems.length)]);
+    }
+    return items;
+  }
+
   private initVisualizer() {
     // Create canvas for 2D audio visualizer at bottom of screen
     this.visualizerCanvas = document.createElement('canvas');
@@ -1172,15 +1435,610 @@ export class VisualEngine {
     this.scene.add(this.packetPoints);
   }
 
+  // === LIVING ICOSAHEDRON ===
+
+  private initIcosahedron() {
+    // Create subdivided icosahedron wireframe
+    const radius = this.spread * 0.7;
+    const detail = this.icoSubdivisionLevel; // Start at 0, will increase over time
+
+    const icoGeo = new THREE.IcosahedronGeometry(radius, detail);
+    const edges = new THREE.EdgesGeometry(icoGeo);
+
+    // Store base positions for displacement
+    this.icoBasePositions = new Float32Array(edges.attributes.position.array);
+
+    // Initialize vertex activity tracking
+    const vertexCount = this.icoBasePositions.length / 3;
+    this.icoVertexDisplacement = new Array(vertexCount).fill(0);
+    this.icoRegionActivity = new Array(12).fill(0); // 12 icosahedron vertices = 12 regions
+
+    // Add color attribute for reactive edges - each vertex gets its own color
+    const baseColor = new THREE.Color(currentTheme.accent1);
+    const colors = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      colors[i * 3] = baseColor.r * 0.5;     // Start dimmer
+      colors[i * 3 + 1] = baseColor.g * 0.5;
+      colors[i * 3 + 2] = baseColor.b * 0.5;
+    }
+    edges.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // Create material with vertex colors for reactive edges
+    this.icoMaterial = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this.icoGeometry = edges;
+    this.icoMesh = new THREE.LineSegments(this.icoGeometry, this.icoMaterial);
+    this.icoMesh.renderOrder = 50; // Render after particles
+    this.scene.add(this.icoMesh);
+
+    // Initialize morph targets (starts as copy of base positions)
+    this.icoMorphTargets = new Float32Array(this.icoBasePositions);
+
+    // Initialize energy conduit lines
+    this.initConduitLines();
+
+    console.log('[Visual] Icosahedron initialized with radius', radius, 'vertices:', vertexCount);
+  }
+
+  private initConduitLines() {
+    // Create geometry for energy conduit lines connecting icosahedron to particles
+    const positions = new Float32Array(this.conduitMaxLines * 6); // 2 points per line * 3 coords
+    const colors = new Float32Array(this.conduitMaxLines * 6);    // Color per vertex
+
+    this.conduitGeometry = new THREE.BufferGeometry();
+    this.conduitGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    this.conduitGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    this.conduitGeometry.setDrawRange(0, 0);
+
+    this.conduitMaterial = new THREE.LineBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.4,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this.conduitLines = new THREE.LineSegments(this.conduitGeometry, this.conduitMaterial);
+    this.conduitLines.renderOrder = 45;
+    this.scene.add(this.conduitLines);
+  }
+
+  private initTesseract() {
+    // 4D hypercube vertices (16 vertices in 4D)
+    const tesseractVertices4D: [number, number, number, number][] = [];
+    for (let i = 0; i < 16; i++) {
+      tesseractVertices4D.push([
+        (i & 1) ? 1 : -1,
+        (i & 2) ? 1 : -1,
+        (i & 4) ? 1 : -1,
+        (i & 8) ? 1 : -1,
+      ]);
+    }
+
+    // Tesseract edges: connect vertices that differ in exactly one coordinate
+    const tesseractEdges: [number, number][] = [];
+    for (let i = 0; i < 16; i++) {
+      for (let j = i + 1; j < 16; j++) {
+        let diff = 0;
+        for (let k = 0; k < 4; k++) {
+          if (tesseractVertices4D[i][k] !== tesseractVertices4D[j][k]) diff++;
+        }
+        if (diff === 1) tesseractEdges.push([i, j]);
+      }
+    }
+
+    // Store for later projection
+    (this as any).tesseractVertices4D = tesseractVertices4D;
+    (this as any).tesseractEdges = tesseractEdges;
+
+    // Create geometry (will be updated each frame when active)
+    const positions = new Float32Array(tesseractEdges.length * 6); // 2 points per edge * 3 coords
+    this.tesseractGeometry = new THREE.BufferGeometry();
+    this.tesseractGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+    this.tesseractMaterial = new THREE.LineBasicMaterial({
+      color: new THREE.Color(currentTheme.accent2),
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      linewidth: 2,
+    });
+
+    this.tesseractMesh = new THREE.LineSegments(this.tesseractGeometry, this.tesseractMaterial);
+    this.tesseractMesh.scale.setScalar(this.spread * 0.7); // Larger for more visibility
+    this.tesseractMesh.renderOrder = 100; // Render on top
+    this.scene.add(this.tesseractMesh);
+  }
+
+  private projectTesseract() {
+    // Project 4D to 3D using stereographic projection
+    const vertices4D = (this as any).tesseractVertices4D as [number, number, number, number][];
+    const edges = (this as any).tesseractEdges as [number, number][];
+    const rot = this.tesseractRotation4D;
+
+    // Apply 4D rotations and project to 3D
+    const project4Dto3D = (v: [number, number, number, number]): THREE.Vector3 => {
+      let [x, y, z, w] = v;
+
+      // XY rotation
+      const cosXY = Math.cos(rot.xy), sinXY = Math.sin(rot.xy);
+      [x, y] = [x * cosXY - y * sinXY, x * sinXY + y * cosXY];
+
+      // XZ rotation
+      const cosXZ = Math.cos(rot.xz), sinXZ = Math.sin(rot.xz);
+      [x, z] = [x * cosXZ - z * sinXZ, x * sinXZ + z * cosXZ];
+
+      // XW rotation (the "4D" rotation)
+      const cosXW = Math.cos(rot.xw), sinXW = Math.sin(rot.xw);
+      [x, w] = [x * cosXW - w * sinXW, x * sinXW + w * cosXW];
+
+      // YZ rotation
+      const cosYZ = Math.cos(rot.yz), sinYZ = Math.sin(rot.yz);
+      [y, z] = [y * cosYZ - z * sinYZ, y * sinYZ + z * cosYZ];
+
+      // YW rotation
+      const cosYW = Math.cos(rot.yw), sinYW = Math.sin(rot.yw);
+      [y, w] = [y * cosYW - w * sinYW, y * sinYW + w * cosYW];
+
+      // ZW rotation
+      const cosZW = Math.cos(rot.zw), sinZW = Math.sin(rot.zw);
+      [z, w] = [z * cosZW - w * sinZW, z * sinZW + w * cosZW];
+
+      // Stereographic projection from 4D to 3D
+      const distance = 3;
+      const scale = distance / (distance - w);
+      return new THREE.Vector3(x * scale, y * scale, z * scale);
+    };
+
+    // Update geometry
+    const positions = this.tesseractGeometry.attributes.position.array as Float32Array;
+    let idx = 0;
+    for (const [a, b] of edges) {
+      const va = project4Dto3D(vertices4D[a]);
+      const vb = project4Dto3D(vertices4D[b]);
+      positions[idx++] = va.x;
+      positions[idx++] = va.y;
+      positions[idx++] = va.z;
+      positions[idx++] = vb.x;
+      positions[idx++] = vb.y;
+      positions[idx++] = vb.z;
+    }
+    this.tesseractGeometry.attributes.position.needsUpdate = true;
+  }
+
+  // === UNIFIED BREATHING ===
+
+  private updateGlobalBreath(dt: number) {
+    // Breath speed increases with tension - calm is slow, tense is fast
+    const breathSpeed = 0.4 + this.tension * 1.2;
+    this.globalBreathPhase += dt * breathSpeed;
+
+    // Breath amplitude also increases with tension
+    const breathAmount = 0.02 + this.tension * 0.04;
+    this.globalBreathScale = 1 + Math.sin(this.globalBreathPhase) * breathAmount;
+  }
+
+  private updateIcosahedron(dt: number) {
+    if (!this.icoMesh) return;
+
+    // === DISSOLVE/REFORM EFFECT ===
+    this.updateDissolveReform(dt);
+
+    // Hide icosahedron when fully dissolved
+    if (this.icoDissolveProgress > 0.8) {
+      this.icoMaterial.opacity = Math.max(0, 1 - this.icoDissolveProgress * 2) * 0.6;
+    }
+
+    // Use global breath for icosahedron scale - unified with all elements
+    // Add disruption shake when tesseract is active
+    let scale = this.globalBreathScale;
+    if (this.tesseractActive && this.tesseractIntensity > 0) {
+      const shake = Math.sin(this.time * 30) * this.tesseractIntensity * 0.02;
+      scale += shake;
+    }
+    this.icoMesh.scale.setScalar(scale);
+
+    // Rotate slowly with the main scene
+    this.icoMesh.rotation.y = this.rotationAngle * 0.5;
+    this.icoMesh.rotation.x = Math.sin(this.time * 0.1) * 0.1;
+
+    // === MORPHING ===
+    // Interpolate positions toward morph targets (unless disrupted)
+    if (!this.tesseractActive && !this.icoDissolving) {
+      this.applyMorphing(dt);
+    }
+
+    // === TESSERACT DISRUPTION ===
+    // When tesseract is active, distort icosahedron vertices
+    if (this.tesseractActive && this.tesseractIntensity > 0.1) {
+      this.applyIcosahedronDisruption(dt);
+    }
+
+    // Accumulate activity for subdivision growth
+    this.icoActivityAccumulator += this.tension * dt * 0.1;
+    if (this.icoActivityAccumulator > 20 && this.icoSubdivisionLevel < 2) {
+      this.subdivideIcosahedron();
+      this.icoActivityAccumulator = 0;
+    }
+
+    // Update opacity based on formation and dissolve state
+    if (!this.icoDissolving && !this.icoReforming) {
+      const isIcoFormation = FORMATIONS[this.currentFormationIndex]?.name === 'ICOSAHEDRON';
+      const targetOpacity = isIcoFormation ? 0.85 : 0.6;
+      this.icoMaterial.opacity += (targetOpacity - this.icoMaterial.opacity) * dt * 2;
+    }
+
+    // === REACTIVE EDGES ===
+    this.updateReactiveEdges(dt);
+
+    // === ENERGY CONDUIT LINES ===
+    this.updateConduitLines(dt);
+
+    // Decay region activity
+    for (let i = 0; i < this.icoRegionActivity.length; i++) {
+      this.icoRegionActivity[i] *= 0.98;
+    }
+  }
+
+  private applyMorphing(dt: number) {
+    const positions = this.icoGeometry.attributes.position.array as Float32Array;
+    const vertexCount = positions.length / 3;
+    const morphSpeed = dt * 1.5; // Smooth morphing
+
+    for (let i = 0; i < vertexCount; i++) {
+      const targetX = this.icoMorphTargets[i * 3];
+      const targetY = this.icoMorphTargets[i * 3 + 1];
+      const targetZ = this.icoMorphTargets[i * 3 + 2];
+
+      positions[i * 3] += (targetX - positions[i * 3]) * morphSpeed;
+      positions[i * 3 + 1] += (targetY - positions[i * 3 + 1]) * morphSpeed;
+      positions[i * 3 + 2] += (targetZ - positions[i * 3 + 2]) * morphSpeed;
+    }
+
+    this.icoGeometry.attributes.position.needsUpdate = true;
+  }
+
+  private updateDissolveReform(dt: number) {
+    if (this.icoDissolving) {
+      this.icoDissolveProgress += dt * 0.8; // Dissolve over ~1.25 seconds
+
+      // Update dissolved particle positions
+      for (const p of this.dissolvedParticles) {
+        p.pos.add(p.vel.clone().multiplyScalar(dt));
+        p.vel.multiplyScalar(0.95); // Damping
+      }
+
+      // Start reforming when dissolve is complete
+      if (this.icoDissolveProgress >= 1) {
+        this.icoDissolving = false;
+        this.icoReforming = true;
+        this.icoDissolveProgress = 1;
+
+        // Set reform targets based on new morph targets
+        const sampleRate = Math.max(1, Math.floor(this.icoMorphTargets.length / 3 / 30));
+        let idx = 0;
+        for (let i = 0; i < this.icoMorphTargets.length / 3 && idx < this.dissolvedParticles.length; i += sampleRate) {
+          this.dissolvedParticles[idx].target.set(
+            this.icoMorphTargets[i * 3],
+            this.icoMorphTargets[i * 3 + 1],
+            this.icoMorphTargets[i * 3 + 2]
+          );
+          idx++;
+        }
+      }
+    }
+
+    if (this.icoReforming) {
+      this.icoDissolveProgress -= dt * 0.6; // Reform over ~1.67 seconds
+
+      // Move dissolved particles toward targets
+      for (const p of this.dissolvedParticles) {
+        const dir = p.target.clone().sub(p.pos);
+        p.pos.add(dir.multiplyScalar(dt * 3));
+      }
+
+      // Complete reform
+      if (this.icoDissolveProgress <= 0) {
+        this.icoReforming = false;
+        this.icoDissolveProgress = 0;
+        this.dissolvedParticles = [];
+      }
+    }
+  }
+
+  private updateConduitLines(dt: number) {
+    if (!this.conduitGeometry) return;
+
+    const icoPositions = this.icoGeometry.attributes.position.array as Float32Array;
+    const particlePositions = this.particleGeometry.attributes.position.array as Float32Array;
+    const conduitPositions = this.conduitGeometry.attributes.position.array as Float32Array;
+    const conduitColors = this.conduitGeometry.attributes.color.array as Float32Array;
+
+    const icoVertexCount = icoPositions.length / 3;
+    const connectionDist = 40; // Max distance for conduit connection
+    let lineCount = 0;
+
+    const accent1 = new THREE.Color(currentTheme.accent1);
+    const accent2 = new THREE.Color(currentTheme.accent2);
+
+    // Sample icosahedron vertices (every 4th to reduce line count)
+    for (let v = 0; v < icoVertexCount && lineCount < this.conduitMaxLines; v += 4) {
+      const vx = icoPositions[v * 3] * this.globalBreathScale;
+      const vy = icoPositions[v * 3 + 1] * this.globalBreathScale;
+      const vz = icoPositions[v * 3 + 2] * this.globalBreathScale;
+
+      // Find closest particle
+      let closestDist = Infinity;
+      let closestIdx = -1;
+
+      // Sample particles (every 20th for performance)
+      for (let p = 0; p < this.particleCount; p += 20) {
+        const px = particlePositions[p * 3];
+        const py = particlePositions[p * 3 + 1];
+        const pz = particlePositions[p * 3 + 2];
+
+        const dx = vx - px;
+        const dy = vy - py;
+        const dz = vz - pz;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist < closestDist && dist < connectionDist) {
+          closestDist = dist;
+          closestIdx = p;
+        }
+      }
+
+      if (closestIdx >= 0) {
+        const px = particlePositions[closestIdx * 3];
+        const py = particlePositions[closestIdx * 3 + 1];
+        const pz = particlePositions[closestIdx * 3 + 2];
+
+        // Set line positions
+        const idx = lineCount * 6;
+        conduitPositions[idx] = vx;
+        conduitPositions[idx + 1] = vy;
+        conduitPositions[idx + 2] = vz;
+        conduitPositions[idx + 3] = px;
+        conduitPositions[idx + 4] = py;
+        conduitPositions[idx + 5] = pz;
+
+        // Color based on distance (closer = brighter)
+        const proximity = 1 - closestDist / connectionDist;
+        const pulse = 0.5 + Math.sin(this.time * 3 + v * 0.1) * 0.3; // Pulsing glow
+
+        // Blend colors with pulse
+        const r = (accent1.r * 0.5 + accent2.r * 0.5) * proximity * pulse;
+        const g = (accent1.g * 0.5 + accent2.g * 0.5) * proximity * pulse;
+        const b = (accent1.b * 0.5 + accent2.b * 0.5) * proximity * pulse;
+
+        conduitColors[idx] = r;
+        conduitColors[idx + 1] = g;
+        conduitColors[idx + 2] = b;
+        conduitColors[idx + 3] = r * 0.5;
+        conduitColors[idx + 4] = g * 0.5;
+        conduitColors[idx + 5] = b * 0.5;
+
+        lineCount++;
+      }
+    }
+
+    this.conduitGeometry.attributes.position.needsUpdate = true;
+    this.conduitGeometry.attributes.color.needsUpdate = true;
+    this.conduitGeometry.setDrawRange(0, lineCount * 2);
+
+    // Conduit opacity based on activity
+    this.conduitMaterial.opacity = 0.2 + this.tension * 0.3;
+  }
+
+  private applyIcosahedronDisruption(dt: number) {
+    const positions = this.icoGeometry.attributes.position.array as Float32Array;
+    const colors = this.icoGeometry.attributes.color?.array as Float32Array | undefined;
+    const vertexCount = positions.length / 3;
+
+    // Update disruption phase for wave effect
+    this.tesseractDisruptionPhase += dt * 8;
+
+    const intensity = this.tesseractIntensity;
+    const disruptColor = new THREE.Color(currentTheme.accent2);
+
+    for (let i = 0; i < vertexCount; i++) {
+      const baseX = this.icoBasePositions[i * 3];
+      const baseY = this.icoBasePositions[i * 3 + 1];
+      const baseZ = this.icoBasePositions[i * 3 + 2];
+
+      // Calculate distance from center for wave effect
+      const dist = Math.sqrt(baseX * baseX + baseY * baseY + baseZ * baseZ);
+      const wave = Math.sin(this.tesseractDisruptionPhase + dist * 0.1) * intensity;
+
+      // Direction from center (for push/pull)
+      const len = dist || 1;
+      const nx = baseX / len;
+      const ny = baseY / len;
+      const nz = baseZ / len;
+
+      // Displacement: push outward with wave, add some chaotic jitter
+      const jitter = (Math.random() - 0.5) * intensity * 3;
+      const displacement = wave * 8 + jitter;
+
+      positions[i * 3] = baseX + nx * displacement;
+      positions[i * 3 + 1] = baseY + ny * displacement;
+      positions[i * 3 + 2] = baseZ + nz * displacement;
+
+      // Flash colors during disruption
+      if (colors) {
+        const flash = Math.abs(wave) * 2;
+        colors[i * 3] = Math.min(1.5, colors[i * 3] + disruptColor.r * flash * dt * 10);
+        colors[i * 3 + 1] = Math.min(1.5, colors[i * 3 + 1] + disruptColor.g * flash * dt * 10);
+        colors[i * 3 + 2] = Math.min(1.5, colors[i * 3 + 2] + disruptColor.b * flash * dt * 10);
+      }
+    }
+
+    this.icoGeometry.attributes.position.needsUpdate = true;
+    if (colors) this.icoGeometry.attributes.color.needsUpdate = true;
+  }
+
+  private restoreIcosahedronPositions(dt: number) {
+    const positions = this.icoGeometry.attributes.position.array as Float32Array;
+    const vertexCount = positions.length / 3;
+
+    // Smoothly restore to base positions
+    const restoreSpeed = dt * 2;
+
+    for (let i = 0; i < vertexCount; i++) {
+      positions[i * 3] += (this.icoBasePositions[i * 3] - positions[i * 3]) * restoreSpeed;
+      positions[i * 3 + 1] += (this.icoBasePositions[i * 3 + 1] - positions[i * 3 + 1]) * restoreSpeed;
+      positions[i * 3 + 2] += (this.icoBasePositions[i * 3 + 2] - positions[i * 3 + 2]) * restoreSpeed;
+    }
+
+    this.icoGeometry.attributes.position.needsUpdate = true;
+  }
+
+  private updateReactiveEdges(dt: number) {
+    if (!this.icoGeometry.attributes.color) return;
+
+    const icoPositions = this.icoGeometry.attributes.position.array as Float32Array;
+    const icoColors = this.icoGeometry.attributes.color.array as Float32Array;
+    const particlePositions = this.particleGeometry.attributes.position.array as Float32Array;
+    const vertexCount = icoPositions.length / 3;
+
+    const baseColor = new THREE.Color(currentTheme.accent1);
+    const hotColor = new THREE.Color(currentTheme.accent2); // Brighter color for nearby particles
+    const proximityThreshold = 25; // Distance at which particles start affecting edges
+    const maxBrightness = 2.0; // How bright edges can get
+
+    // Sample a subset of particles for performance (every 10th particle)
+    const sampleStep = 10;
+    const sampleCount = Math.floor(this.particleCount / sampleStep);
+
+    // For each icosahedron vertex, check proximity to particles
+    for (let v = 0; v < vertexCount; v++) {
+      const vx = icoPositions[v * 3] * this.globalBreathScale;
+      const vy = icoPositions[v * 3 + 1] * this.globalBreathScale;
+      const vz = icoPositions[v * 3 + 2] * this.globalBreathScale;
+
+      let closestDist = Infinity;
+
+      // Check distance to sampled particles
+      for (let p = 0; p < sampleCount; p++) {
+        const pi = p * sampleStep;
+        const px = particlePositions[pi * 3];
+        const py = particlePositions[pi * 3 + 1];
+        const pz = particlePositions[pi * 3 + 2];
+
+        const dx = vx - px;
+        const dy = vy - py;
+        const dz = vz - pz;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        if (dist < closestDist) {
+          closestDist = dist;
+        }
+      }
+
+      // Calculate brightness based on proximity
+      const proximity = Math.max(0, 1 - closestDist / proximityThreshold);
+      const brightness = 0.4 + proximity * (maxBrightness - 0.4);
+
+      // Blend between base color and hot color based on proximity
+      const r = baseColor.r * (1 - proximity) + hotColor.r * proximity;
+      const g = baseColor.g * (1 - proximity) + hotColor.g * proximity;
+      const b = baseColor.b * (1 - proximity) + hotColor.b * proximity;
+
+      // Smooth transition to target color
+      const lerpSpeed = dt * 4;
+      icoColors[v * 3] += (r * brightness - icoColors[v * 3]) * lerpSpeed;
+      icoColors[v * 3 + 1] += (g * brightness - icoColors[v * 3 + 1]) * lerpSpeed;
+      icoColors[v * 3 + 2] += (b * brightness - icoColors[v * 3 + 2]) * lerpSpeed;
+    }
+
+    this.icoGeometry.attributes.color.needsUpdate = true;
+  }
+
+  private subdivideIcosahedron() {
+    if (this.icoSubdivisionLevel >= 2) return;
+
+    this.icoSubdivisionLevel++;
+    console.log(`[Visual] Icosahedron subdivided to level ${this.icoSubdivisionLevel}`);
+
+    // Recreate geometry with higher detail
+    const radius = this.spread * 0.7;
+    const icoGeo = new THREE.IcosahedronGeometry(radius, this.icoSubdivisionLevel);
+    const edges = new THREE.EdgesGeometry(icoGeo);
+
+    // Add color attribute for reactive edges
+    const vertexCount = edges.attributes.position.count;
+    const baseColor = new THREE.Color(currentTheme.accent1);
+    const colors = new Float32Array(vertexCount * 3);
+    for (let i = 0; i < vertexCount; i++) {
+      colors[i * 3] = baseColor.r * 0.5;
+      colors[i * 3 + 1] = baseColor.g * 0.5;
+      colors[i * 3 + 2] = baseColor.b * 0.5;
+    }
+    edges.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // Dispose old geometry
+    this.icoGeometry.dispose();
+
+    // Update
+    this.icoGeometry = edges;
+    this.icoBasePositions = new Float32Array(edges.attributes.position.array);
+    this.icoMesh.geometry = this.icoGeometry;
+
+    // Update vertex tracking
+    this.icoVertexDisplacement = new Array(vertexCount).fill(0);
+  }
+
+  private updateTesseract(dt: number) {
+    if (!this.tesseractMesh) return;
+
+    // Fade in/out based on active state - full brightness when active
+    const targetOpacity = this.tesseractActive ? 1.0 * this.tesseractIntensity : 0;
+    this.tesseractMaterial.opacity += (targetOpacity - this.tesseractMaterial.opacity) * dt * 8;
+
+    if (this.tesseractMaterial.opacity < 0.01) return;
+
+    // Rotate through 4D space - different rotation speeds for trippy effect
+    const baseSpeed = 0.4 + this.tesseractIntensity * 0.6;
+    this.tesseractRotation4D.xy += dt * baseSpeed * 0.7;
+    this.tesseractRotation4D.xz += dt * baseSpeed * 0.5;
+    this.tesseractRotation4D.xw += dt * baseSpeed * 1.1; // This is the "impossible" rotation
+    this.tesseractRotation4D.yz += dt * baseSpeed * 0.3;
+    this.tesseractRotation4D.yw += dt * baseSpeed * 0.8;
+    this.tesseractRotation4D.zw += dt * baseSpeed * 0.6;
+
+    // Project and update geometry
+    this.projectTesseract();
+
+    // Decay intensity - slower fade for more visibility (8 seconds)
+    if (this.tesseractActive) {
+      this.tesseractIntensity -= dt * 0.125;
+      if (this.tesseractIntensity <= 0) {
+        this.tesseractActive = false;
+        this.tesseractIntensity = 0;
+      }
+    }
+  }
+
+  // Trigger tesseract glitch on critical events
+  triggerTesseractGlitch(intensity: number = 1) {
+    this.tesseractActive = true;
+    this.tesseractIntensity = Math.min(1, this.tesseractIntensity + intensity);
+    console.log('[Visual] Tesseract glitch triggered');
+  }
+
   // === HOLOGRAPHIC HUD ===
 
   private initHUD() {
     // Create HUD panels for key stats - orbital scatter positioning
     const panelConfigs = [
-      { id: 'status', label: 'STATUS', orbitAngle: -0.4, orbitRadius: 180, orbitHeight: 60 },
-      { id: 'nodes', label: 'NODES', orbitAngle: 0.3, orbitRadius: 190, orbitHeight: 40 },
-      { id: 'tension', label: 'TENSION', orbitAngle: 0.9, orbitRadius: 175, orbitHeight: -30 },
-      { id: 'threats', label: 'THREATS', orbitAngle: -1.0, orbitRadius: 185, orbitHeight: -50 },
+      { id: 'threatLevel', label: 'THREAT LEVEL', orbitAngle: -0.4, orbitRadius: 180, orbitHeight: 60 },
+      { id: 'ransomware', label: 'RANSOMWARE', orbitAngle: 0.3, orbitRadius: 190, orbitHeight: 40 },
+      { id: 'eventsPerMin', label: 'EVENTS/MIN', orbitAngle: 0.9, orbitRadius: 175, orbitHeight: -30 },
+      { id: 'breaches', label: 'BREACHES', orbitAngle: -1.0, orbitRadius: 185, orbitHeight: -50 },
     ];
 
     panelConfigs.forEach((config, i) => {
@@ -1190,10 +2048,10 @@ export class VisualEngine {
   }
 
   private createHUDPanel(id: string, label: string, orbitAngle: number, orbitRadius: number, orbitHeight: number): HUDPanel {
-    // Create canvas for glass panel texture
+    // Create canvas for glass panel texture (high resolution for crisp text)
     const canvas = document.createElement('canvas');
-    canvas.width = 256;
-    canvas.height = 128;
+    canvas.width = 512;
+    canvas.height = 256;
     const ctx = canvas.getContext('2d')!;
 
     // Create sprite with canvas texture
@@ -1204,7 +2062,7 @@ export class VisualEngine {
     const material = new THREE.SpriteMaterial({
       map: texture,
       transparent: true,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,  // Changed from Additive to prevent bloom blowout
       depthWrite: false,
       depthTest: false,
     });
@@ -1242,86 +2100,91 @@ export class VisualEngine {
     // Clear
     ctx.clearRect(0, 0, w, h);
 
-    // Glass panel background with glow
-    const glowIntensity = 0.15 + pulseIntensity * 0.3;
-    const borderGlow = 0.4 + pulseIntensity * 0.6;
+    const borderGlow = 0.3 + pulseIntensity * 0.3;
+    const pad = 16;
 
-    // Outer glow
-    ctx.shadowColor = `rgba(${this.getThemeRGB()}, ${glowIntensity})`;
-    ctx.shadowBlur = 20 + pulseIntensity * 15;
-
-    // Frosted glass background
-    ctx.fillStyle = `rgba(10, 20, 30, ${0.4 + pulseIntensity * 0.2})`;
+    // Dark background panel (no shadow blur - crisp edges)
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = `rgba(5, 12, 20, 0.9)`;
     ctx.beginPath();
-    ctx.roundRect(4, 4, w - 8, h - 8, 8);
+    ctx.roundRect(pad, pad, w - pad * 2, h - pad * 2, 12);
     ctx.fill();
 
-    // Glass border
+    // Border
     ctx.strokeStyle = `rgba(${this.getThemeRGB()}, ${borderGlow})`;
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.roundRect(4, 4, w - 8, h - 8, 8);
+    ctx.roundRect(pad, pad, w - pad * 2, h - pad * 2, 12);
     ctx.stroke();
 
-    // Scan line effect
-    ctx.fillStyle = `rgba(${this.getThemeRGB()}, 0.03)`;
-    for (let y = 10; y < h - 10; y += 4) {
-      ctx.fillRect(8, y, w - 16, 1);
+    // Subtle scan lines
+    ctx.fillStyle = `rgba(${this.getThemeRGB()}, 0.02)`;
+    for (let y = pad + 10; y < h - pad - 10; y += 6) {
+      ctx.fillRect(pad + 8, y, w - pad * 2 - 16, 1);
     }
 
-    // Reset shadow for text
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = `rgba(${this.getThemeRGB()}, 0.8)`;
+    // Corner brackets (scaled for 512x256)
+    const bracketLen = 24;
+    ctx.strokeStyle = `rgba(${this.getThemeRGB()}, ${0.4 + pulseIntensity * 0.4})`;
+    ctx.lineWidth = 3;
+    // Top-left
+    ctx.beginPath();
+    ctx.moveTo(pad, pad + bracketLen);
+    ctx.lineTo(pad, pad);
+    ctx.lineTo(pad + bracketLen, pad);
+    ctx.stroke();
+    // Top-right
+    ctx.beginPath();
+    ctx.moveTo(w - pad - bracketLen, pad);
+    ctx.lineTo(w - pad, pad);
+    ctx.lineTo(w - pad, pad + bracketLen);
+    ctx.stroke();
+    // Bottom-left
+    ctx.beginPath();
+    ctx.moveTo(pad, h - pad - bracketLen);
+    ctx.lineTo(pad, h - pad);
+    ctx.lineTo(pad + bracketLen, h - pad);
+    ctx.stroke();
+    // Bottom-right
+    ctx.beginPath();
+    ctx.moveTo(w - pad - bracketLen, h - pad);
+    ctx.lineTo(w - pad, h - pad);
+    ctx.lineTo(w - pad, h - pad - bracketLen);
+    ctx.stroke();
 
-    // Label
-    ctx.font = '10px "JetBrains Mono", monospace';
+    // Label (crisp, no shadow)
+    ctx.shadowBlur = 0;
+    ctx.font = '600 20px "JetBrains Mono", monospace';
     ctx.fillStyle = `rgba(${this.getThemeRGB()}, 0.6)`;
     ctx.textAlign = 'center';
-    ctx.fillText(label, w / 2, 28);
+    ctx.fillText(label, w / 2, pad + 45);
 
-    // Value
-    ctx.font = 'bold 28px "JetBrains Mono", monospace';
-    ctx.fillStyle = `rgba(255, 255, 255, ${0.9 + pulseIntensity * 0.1})`;
-    ctx.shadowColor = `rgba(${this.getThemeRGB()}, 1)`;
-    ctx.shadowBlur = 12 + pulseIntensity * 8;
+    // Value - crisp text with dark stroke for contrast
+    let displayValue: string;
+    if (panel.id === 'threatLevel') {
+      displayValue = `LEVEL ${value}`;
+    } else if (typeof value === 'number') {
+      displayValue = value.toLocaleString();
+    } else {
+      displayValue = String(value);
+    }
 
-    const displayValue = typeof value === 'number'
-      ? (panel.id === 'tension' ? value.toFixed(2) : value.toLocaleString())
-      : value;
-    ctx.fillText(String(displayValue), w / 2, 75);
+    ctx.font = 'bold 56px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
 
-    // Corner accents
-    ctx.strokeStyle = `rgba(${this.getThemeRGB()}, ${0.5 + pulseIntensity * 0.5})`;
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 0;
+    // Dark stroke for contrast (draw text twice - stroke then fill)
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.lineWidth = 5;
+    ctx.strokeText(String(displayValue), w / 2, h - pad - 55);
 
-    // Top left corner
-    ctx.beginPath();
-    ctx.moveTo(8, 20);
-    ctx.lineTo(8, 8);
-    ctx.lineTo(20, 8);
-    ctx.stroke();
+    // Light gray fill (not pure white to avoid bloom)
+    ctx.fillStyle = `rgba(180, 195, 210, ${0.95 + pulseIntensity * 0.05})`;
+    ctx.fillText(String(displayValue), w / 2, h - pad - 55);
 
-    // Top right corner
-    ctx.beginPath();
-    ctx.moveTo(w - 8, 20);
-    ctx.lineTo(w - 8, 8);
-    ctx.lineTo(w - 20, 8);
-    ctx.stroke();
-
-    // Bottom left corner
-    ctx.beginPath();
-    ctx.moveTo(8, h - 20);
-    ctx.lineTo(8, h - 8);
-    ctx.lineTo(20, h - 8);
-    ctx.stroke();
-
-    // Bottom right corner
-    ctx.beginPath();
-    ctx.moveTo(w - 8, h - 20);
-    ctx.lineTo(w - 8, h - 8);
-    ctx.lineTo(w - 20, h - 8);
-    ctx.stroke();
+    // Subtle colored underline accent
+    const textWidth = ctx.measureText(String(displayValue)).width;
+    ctx.fillStyle = `rgba(${this.getThemeRGB()}, ${0.3 + pulseIntensity * 0.4})`;
+    ctx.fillRect(w / 2 - textWidth / 2, h - pad - 40, textWidth, 2);
 
     // Update texture
     (panel.sprite.material as THREE.SpriteMaterial).map!.needsUpdate = true;
@@ -1369,11 +2232,11 @@ export class VisualEngine {
   }
 
   // Public method to update HUD stats from main.ts
-  updateHUDStats(stats: { status?: string; nodes?: number; tension?: number; threats?: number }) {
-    if (stats.status !== undefined) this.hudStats.status = stats.status;
-    if (stats.nodes !== undefined) this.hudStats.nodes = stats.nodes;
-    if (stats.tension !== undefined) this.hudStats.tension = stats.tension;
-    if (stats.threats !== undefined) this.hudStats.threats = stats.threats;
+  updateHUDStats(stats: { threatLevel?: number; ransomware?: number; eventsPerMin?: number; breaches?: string }) {
+    if (stats.threatLevel !== undefined) this.hudStats.threatLevel = stats.threatLevel;
+    if (stats.ransomware !== undefined) this.hudStats.ransomware = stats.ransomware;
+    if (stats.eventsPerMin !== undefined) this.hudStats.eventsPerMin = stats.eventsPerMin;
+    if (stats.breaches !== undefined) this.hudStats.breaches = stats.breaches;
   }
 
   // Spawn a data packet that travels along a connection line
@@ -1434,6 +2297,9 @@ export class VisualEngine {
     this.isTransitioning = true;
     this.transitionProgress = 0;
 
+    // Start dissolve effect for icosahedron
+    this.startIcoDissolve();
+
     // Pick next formation
     this.currentFormationIndex = (this.currentFormationIndex + 1) % FORMATIONS.length;
     const formation = FORMATIONS[this.currentFormationIndex];
@@ -1447,17 +2313,140 @@ export class VisualEngine {
 
     this.targetCameraDistance = formation.cameraDistance;
 
-    // Show formation name
-    this.showFormationName();
+    // Calculate new morph targets for icosahedron
+    this.calculateMorphTargets(formation.name);
   }
 
-  private showFormationName() {
-    const formation = FORMATIONS[this.currentFormationIndex];
-    this.formationLabel.textContent = formation.name;
-    this.formationLabel.style.opacity = '1';
-    setTimeout(() => {
-      this.formationLabel.style.opacity = '0.3';
-    }, 2000);
+  private startIcoDissolve() {
+    if (this.icoDissolving) return;
+
+    this.icoDissolving = true;
+    this.icoReforming = false;
+    this.icoDissolveProgress = 0;
+    this.dissolvedParticles = [];
+
+    // Create dissolved particles from icosahedron vertices
+    const positions = this.icoGeometry.attributes.position.array as Float32Array;
+    const vertexCount = positions.length / 3;
+
+    // Sample every few vertices to create floating particles
+    const sampleRate = Math.max(1, Math.floor(vertexCount / 30));
+    for (let i = 0; i < vertexCount; i += sampleRate) {
+      const x = positions[i * 3] * this.globalBreathScale;
+      const y = positions[i * 3 + 1] * this.globalBreathScale;
+      const z = positions[i * 3 + 2] * this.globalBreathScale;
+
+      this.dissolvedParticles.push({
+        pos: new THREE.Vector3(x, y, z),
+        vel: new THREE.Vector3(
+          (Math.random() - 0.5) * 20,
+          (Math.random() - 0.5) * 20,
+          (Math.random() - 0.5) * 20
+        ),
+        target: new THREE.Vector3(x, y, z), // Will be updated when reforming
+      });
+    }
+  }
+
+  private calculateMorphTargets(formationName: string) {
+    // Calculate how icosahedron should morph to match formation
+    const vertexCount = this.icoBasePositions.length / 3;
+
+    for (let i = 0; i < vertexCount; i++) {
+      const baseX = this.icoBasePositions[i * 3];
+      const baseY = this.icoBasePositions[i * 3 + 1];
+      const baseZ = this.icoBasePositions[i * 3 + 2];
+
+      let targetX = baseX;
+      let targetY = baseY;
+      let targetZ = baseZ;
+
+      // Morph based on formation type
+      switch (formationName) {
+        case 'DNA HELIX':
+          // Elongate vertically, narrow horizontally
+          targetX = baseX * 0.6;
+          targetY = baseY * 1.8;
+          targetZ = baseZ * 0.6;
+          break;
+
+        case 'HYPERCUBE':
+          // Make more cubic/angular
+          const len = Math.sqrt(baseX * baseX + baseY * baseY + baseZ * baseZ);
+          const maxCoord = Math.max(Math.abs(baseX), Math.abs(baseY), Math.abs(baseZ));
+          const cubeFactor = maxCoord / len;
+          targetX = baseX * (0.7 + cubeFactor * 0.4);
+          targetY = baseY * (0.7 + cubeFactor * 0.4);
+          targetZ = baseZ * (0.7 + cubeFactor * 0.4);
+          break;
+
+        case 'SPHERE':
+          // More spherical - smooth out
+          const sphereLen = Math.sqrt(baseX * baseX + baseY * baseY + baseZ * baseZ);
+          const targetLen = this.spread * 0.7;
+          targetX = (baseX / sphereLen) * targetLen;
+          targetY = (baseY / sphereLen) * targetLen;
+          targetZ = (baseZ / sphereLen) * targetLen;
+          break;
+
+        case 'RING SYSTEM':
+        case 'VORTEX':
+          // Flatten vertically, expand horizontally
+          targetX = baseX * 1.3;
+          targetY = baseY * 0.4;
+          targetZ = baseZ * 1.3;
+          break;
+
+        case 'WAVE FIELD':
+          // Add wave distortion
+          const wave = Math.sin(baseX * 0.1 + baseZ * 0.1) * 10;
+          targetY = baseY + wave;
+          break;
+
+        case 'DATA MATRIX':
+          // Grid-like, more structured
+          targetX = Math.round(baseX / 20) * 20 + (baseX - Math.round(baseX / 20) * 20) * 0.3;
+          targetY = Math.round(baseY / 20) * 20 + (baseY - Math.round(baseY / 20) * 20) * 0.3;
+          targetZ = Math.round(baseZ / 20) * 20 + (baseZ - Math.round(baseZ / 20) * 20) * 0.3;
+          break;
+
+        case 'CONSTELLATION':
+        case 'PARTICLE CLOUD':
+          // Slightly expanded, more diffuse
+          targetX = baseX * 1.2;
+          targetY = baseY * 1.2;
+          targetZ = baseZ * 1.2;
+          break;
+
+        case 'NEURAL NETWORK':
+          // Organic, slightly blobby
+          const noise = Math.sin(baseX * 0.15) * Math.cos(baseY * 0.15) * Math.sin(baseZ * 0.15) * 8;
+          targetX = baseX + noise * 0.3;
+          targetY = baseY + noise * 0.3;
+          targetZ = baseZ + noise * 0.3;
+          break;
+
+        case 'ICOSAHEDRON':
+        default:
+          // Standard icosahedron - no morph
+          break;
+      }
+
+      this.icoMorphTargets[i * 3] = targetX;
+      this.icoMorphTargets[i * 3 + 1] = targetY;
+      this.icoMorphTargets[i * 3 + 2] = targetZ;
+    }
+
+    console.log(`[Visual] Morph targets calculated for ${formationName}`);
+  }
+
+  private updateGlitchIntensity() {
+    // Toggle high-tension class based on current tension
+    if (this.tension > 0.6) {
+      this.formationLabel.classList.add('high-tension');
+    } else {
+      this.formationLabel.classList.remove('high-tension');
+    }
   }
 
   // === UPDATE ===
@@ -1465,6 +2454,9 @@ export class VisualEngine {
   update(deltaTime: number) {
     this.time += deltaTime;
     this.tension = Math.max(0, this.tension - deltaTime * 0.05);
+
+    // Update global breath - shared pulse for all elements
+    this.updateGlobalBreath(deltaTime);
 
     // Formation timer
     this.formationTimer += deltaTime;
@@ -1494,11 +2486,17 @@ export class VisualEngine {
     // Update labels
     this.updateLabels(deltaTime);
 
+    // Update glitch intensity based on tension
+    this.updateGlitchIntensity();
+
     // Update trails
     this.updateTrails(deltaTime);
 
     // Update data rain
     this.updateDataRain(deltaTime);
+
+    // Data stream disabled
+    // this.updateDataStream(deltaTime);
 
     // Update audio visualizer
     this.updateVisualizer(deltaTime);
@@ -1508,6 +2506,12 @@ export class VisualEngine {
 
     // Update data packets
     this.updatePackets(deltaTime);
+
+    // Update living icosahedron
+    this.updateIcosahedron(deltaTime);
+
+    // Update tesseract glitch
+    this.updateTesseract(deltaTime);
 
     // Update holographic HUD
     this.updateHUD(deltaTime);
@@ -1522,9 +2526,10 @@ export class VisualEngine {
     this.rainMaterial.uniforms.time.value = this.time;
     this.rainMaterial.uniforms.tension.value = this.tension;
 
-    // Post-processing - trippy bloom with subtle chromatic aberration
-    const glitchBoost = this.glitchIntensity * 0.5;
-    this.bloomPass.strength = 1.8 + this.tension * 1.2 + Math.sin(this.time * 0.5) * 0.2 + glitchBoost;
+    // Post-processing - subtle bloom with chromatic aberration
+    const glitchBoost = this.glitchIntensity * 0.2;
+    const themeBloom = currentTheme.bloom ?? 1.0;
+    this.bloomPass.strength = (0.5 + this.tension * 0.3 + Math.sin(this.time * 0.5) * 0.05 + glitchBoost) * themeBloom;
     this.chromaticPass.uniforms.amount.value = 0.0015 + this.tension * 0.003 + this.glitchIntensity * 0.01;
     this.chromaticPass.uniforms.time.value = this.time;
 
@@ -1600,6 +2605,111 @@ export class VisualEngine {
     this.rainPoints.visible = true;
   }
 
+  private updateDataStream(dt: number) {
+    if (!this.dataStreamCtx) return;
+
+    const ctx = this.dataStreamCtx;
+    const width = this.dataStreamCanvas.width;
+    const height = this.dataStreamCanvas.height;
+
+    // Semi-transparent clear for trail effect
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+    ctx.fillRect(0, 0, width, height);
+
+    // Update density based on activity
+    this.dataStreamDensity = 0.25 + this.tension * 0.4;
+
+    // Maybe spawn new columns based on density
+    const columnWidth = 55;
+    const maxColumns = Math.ceil(width / columnWidth);
+    if (this.dataStreamColumns.length < maxColumns * this.dataStreamDensity && Math.random() < 0.015 + this.tension * 0.02) {
+      // Find an empty x position
+      const usedX = new Set(this.dataStreamColumns.map(c => Math.floor(c.x / columnWidth)));
+      const availableSlots: number[] = [];
+      for (let i = 0; i < maxColumns; i++) {
+        if (!usedX.has(i)) availableSlots.push(i);
+      }
+      if (availableSlots.length > 0) {
+        const slot = availableSlots[Math.floor(Math.random() * availableSlots.length)];
+        const length = 6 + Math.floor(Math.random() * 10);
+        this.dataStreamColumns.push({
+          x: slot * columnWidth,
+          y: -length * 20,
+          speed: 40 + Math.random() * 60 + this.tension * 30,
+          chars: this.generateStreamItems(length),
+          length: length,
+          brightness: 0.35 + Math.random() * 0.25 + this.tension * 0.15,
+          targetBrightness: 0.35 + Math.random() * 0.25,
+        });
+      }
+    }
+
+    // Get theme color for rain
+    const rainColor = currentTheme.rain;
+    const r = (rainColor >> 16) & 0xff;
+    const g = (rainColor >> 8) & 0xff;
+    const b = rainColor & 0xff;
+
+    // Update and draw columns
+    ctx.font = '11px "JetBrains Mono", monospace';
+    ctx.textAlign = 'center';
+
+    const itemHeight = 18; // Spacing between items
+
+    for (let i = this.dataStreamColumns.length - 1; i >= 0; i--) {
+      const col = this.dataStreamColumns[i];
+
+      // Move down
+      col.y += col.speed * dt;
+
+      // Smooth brightness transitions
+      col.brightness += (col.targetBrightness - col.brightness) * dt * 2;
+
+      // Occasionally change target brightness
+      if (Math.random() < 0.01) {
+        col.targetBrightness = 0.3 + Math.random() * 0.3 + this.tension * 0.15;
+      }
+
+      // Occasionally change an item
+      if (Math.random() < 0.02) {
+        const itemIndex = Math.floor(Math.random() * col.chars.length);
+        col.chars[itemIndex] = this.dataStreamItems[Math.floor(Math.random() * this.dataStreamItems.length)];
+      }
+
+      // Draw items
+      for (let j = 0; j < col.chars.length; j++) {
+        const itemY = col.y + j * itemHeight;
+
+        // Skip if off screen
+        if (itemY < -20 || itemY > height + 20) continue;
+
+        // Calculate fade based on position in column
+        let alpha: number;
+        if (j === 0) {
+          // Head item is brightest (white/bright)
+          alpha = col.brightness * 1.3;
+          ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(alpha, 1)})`;
+        } else if (j === 1) {
+          // Second item slightly less bright
+          alpha = col.brightness * 1.0;
+          ctx.fillStyle = `rgba(${Math.min(r + 80, 255)}, ${Math.min(g + 80, 255)}, ${Math.min(b + 80, 255)}, ${alpha})`;
+        } else {
+          // Fade towards tail
+          const fadePos = (j - 1) / (col.chars.length - 1);
+          alpha = col.brightness * (1 - fadePos * 0.85);
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${Math.max(alpha, 0.05)})`;
+        }
+
+        ctx.fillText(col.chars[j], col.x + columnWidth / 2, itemY);
+      }
+
+      // Remove if completely off screen
+      if (col.y > height + col.length * itemHeight) {
+        this.dataStreamColumns.splice(i, 1);
+      }
+    }
+  }
+
   private updateVisualizer(dt: number) {
     if (!this.visualizerCtx) return;
 
@@ -1662,27 +2772,54 @@ export class VisualEngine {
       frag.lifetime += dt;
 
       if (frag.lifetime >= frag.maxLifetime) {
-        // Remove fragment
-        if (this.dataFragmentMeshes.children[i]) {
-          this.dataFragmentMeshes.remove(this.dataFragmentMeshes.children[i]);
+        // Remove fragment and its mesh
+        if (frag.mesh) {
+          this.dataFragmentMeshes.remove(frag.mesh);
+          frag.mesh.geometry.dispose();
+          (frag.mesh.material as THREE.Material).dispose();
+        }
+        // Remove connection line
+        if (frag.connectionLine) {
+          this.scene.remove(frag.connectionLine);
+          frag.connectionLine.geometry.dispose();
+          (frag.connectionLine.material as THREE.Material).dispose();
         }
         this.dataFragments.splice(i, 1);
         continue;
       }
 
-      // Update position with drift
-      frag.position.add(frag.velocity.clone().multiplyScalar(dt));
-      frag.rotation += frag.rotationSpeed * dt;
+      const lifeRatio = frag.lifetime / frag.maxLifetime;
+
+      // Accelerate drift as fragment ages (moves away faster over time)
+      const driftMultiplier = 1 + lifeRatio * 2;
+      frag.position.add(frag.velocity.clone().multiplyScalar(dt * driftMultiplier));
 
       // Update mesh if exists
-      const mesh = this.dataFragmentMeshes.children[i] as THREE.Mesh;
-      if (mesh) {
-        mesh.position.copy(frag.position);
-        mesh.rotation.z = frag.rotation;
+      if (frag.mesh) {
+        frag.mesh.position.copy(frag.position);
 
-        // Fade out
-        const fade = 1 - frag.lifetime / frag.maxLifetime;
-        (mesh.material as THREE.MeshBasicMaterial).opacity = fade * 0.8;
+        // Billboard mode - always face camera
+        frag.mesh.quaternion.copy(this.camera.quaternion);
+
+        // Fade out - start earlier (40% of life) for smoother decay
+        const fadeStart = 0.4;
+        const fade = lifeRatio > fadeStart ? 1 - (lifeRatio - fadeStart) / (1 - fadeStart) : 1;
+        // Also scale down as it fades
+        const scaleDown = 1 - lifeRatio * 0.3;
+        frag.mesh.scale.setScalar(scaleDown);
+        (frag.mesh.material as THREE.MeshBasicMaterial).opacity = fade * 0.85;
+      }
+
+      // Update connection line - keep visible, fade near end
+      if (frag.connectionLine && frag.sourcePosition) {
+        const positions = frag.connectionLine.geometry.attributes.position as THREE.BufferAttribute;
+        positions.setXYZ(1, frag.position.x, frag.position.y, frag.position.z);
+        positions.needsUpdate = true;
+
+        // Connection line stays visible, fades in last 40% of life
+        const lineFadeStart = 0.6;
+        const lineFade = lifeRatio > lineFadeStart ? 1 - (lifeRatio - lineFadeStart) / (1 - lineFadeStart) : 1;
+        (frag.connectionLine.material as THREE.LineBasicMaterial).opacity = lineFade * 0.7;
       }
     }
   }
@@ -1745,7 +2882,7 @@ export class VisualEngine {
   }
 
   // Spawn a 3D data fragment (internal, smaller)
-  private spawnDataFragment(text: string, position: THREE.Vector3, color: THREE.Color) {
+  private spawnDataFragment(text: string, position: THREE.Vector3, color: THREE.Color, sourcePos?: THREE.Vector3) {
     if (this.dataFragments.length >= this.maxFragments) return;
     if (this.isMobileDevice) return; // Skip on mobile for performance
 
@@ -1778,6 +2915,27 @@ export class VisualEngine {
     mesh.position.copy(position);
 
     this.dataFragmentMeshes.add(mesh);
+
+    // Create connection line to source if provided
+    let connectionLine: THREE.Line | undefined;
+    const sourcePosition = sourcePos?.clone();
+    if (sourcePosition) {
+      const lineColor = color.clone();
+      lineColor.offsetHSL(0, 0, 0.2);
+      const lineMat = new THREE.LineBasicMaterial({
+        color: lineColor,
+        transparent: true,
+        opacity: 0.6,
+        blending: THREE.AdditiveBlending,
+      });
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([
+        sourcePosition,
+        position.clone(),
+      ]);
+      connectionLine = new THREE.Line(lineGeo, lineMat);
+      this.scene.add(connectionLine);
+    }
+
     this.dataFragments.push({
       position: position.clone(),
       velocity: new THREE.Vector3(
@@ -1788,15 +2946,18 @@ export class VisualEngine {
       text,
       color,
       lifetime: 0,
-      maxLifetime: 4 + Math.random() * 2,
+      maxLifetime: 3 + Math.random() * 2,  // 3-5 seconds
       scale: 1,
       rotation: (Math.random() - 0.5) * 0.3,
       rotationSpeed: (Math.random() - 0.5) * 0.5,
+      mesh,  // Store mesh reference for cleanup!
+      sourcePosition,
+      connectionLine,
     });
   }
 
   // Public: Spawn event text fragment at periphery (for threat feed)
-  spawnEventFragment(type: string, content: string, severity: 'critical' | 'high' | 'medium' | 'low' = 'medium') {
+  spawnEventFragment(type: string, content: string, severity: 'critical' | 'high' | 'medium' | 'low' = 'medium', sourcePos?: THREE.Vector3) {
     if (this.dataFragments.length >= this.maxFragments) return;
     if (this.isMobileDevice) return;
 
@@ -1808,32 +2969,72 @@ export class VisualEngine {
       low: currentTheme.accent3,
     };
     const color = new THREE.Color(severityColors[severity] || currentTheme.accent1);
+    const r = Math.floor(color.r * 255);
+    const g = Math.floor(color.g * 255);
+    const b = Math.floor(color.b * 255);
 
     // Create canvas with enhanced styling
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
     canvas.width = 512;
-    canvas.height = 64;
+    canvas.height = 80;
 
-    // Background glow
-    const gradient = ctx.createRadialGradient(256, 32, 0, 256, 32, 256);
-    gradient.addColorStop(0, `rgba(${Math.floor(color.r * 255)}, ${Math.floor(color.g * 255)}, ${Math.floor(color.b * 255)}, 0.15)`);
-    gradient.addColorStop(1, 'transparent');
-    ctx.fillStyle = gradient;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const w = canvas.width;
+    const h = canvas.height;
+    const pad = 12;
+    const stripeWidth = 4;
 
-    // Type label
-    ctx.font = 'bold 14px JetBrains Mono, monospace';
-    ctx.fillStyle = `rgba(${Math.floor(color.r * 255)}, ${Math.floor(color.g * 255)}, ${Math.floor(color.b * 255)}, 0.8)`;
-    ctx.textAlign = 'center';
-    ctx.fillText(type.toUpperCase(), canvas.width / 2, 20);
+    // Dark background panel
+    ctx.fillStyle = `rgba(5, 10, 15, 0.85)`;
+    ctx.beginPath();
+    ctx.roundRect(pad, pad, w - pad * 2, h - pad * 2, 4);
+    ctx.fill();
 
-    // Content text with glow
-    ctx.shadowColor = `#${color.getHexString()}`;
-    ctx.shadowBlur = 10;
-    ctx.font = 'bold 22px JetBrains Mono, monospace';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(content.substring(0, 40), canvas.width / 2, 48);
+    // Severity stripe on left edge
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.9)`;
+    ctx.fillRect(pad, pad, stripeWidth, h - pad * 2);
+
+    // Corner brackets
+    ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.6)`;
+    ctx.lineWidth = 2;
+    const bracketLen = 12;
+    // Top-left
+    ctx.beginPath();
+    ctx.moveTo(pad, pad + bracketLen);
+    ctx.lineTo(pad, pad);
+    ctx.lineTo(pad + bracketLen, pad);
+    ctx.stroke();
+    // Top-right
+    ctx.beginPath();
+    ctx.moveTo(w - pad - bracketLen, pad);
+    ctx.lineTo(w - pad, pad);
+    ctx.lineTo(w - pad, pad + bracketLen);
+    ctx.stroke();
+    // Bottom-left
+    ctx.beginPath();
+    ctx.moveTo(pad, h - pad - bracketLen);
+    ctx.lineTo(pad, h - pad);
+    ctx.lineTo(pad + bracketLen, h - pad);
+    ctx.stroke();
+    // Bottom-right
+    ctx.beginPath();
+    ctx.moveTo(w - pad - bracketLen, h - pad);
+    ctx.lineTo(w - pad, h - pad);
+    ctx.lineTo(w - pad, h - pad - bracketLen);
+    ctx.stroke();
+
+    // Type label (dimmer, smaller)
+    ctx.font = '600 11px JetBrains Mono, monospace';
+    ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
+    ctx.textAlign = 'left';
+    ctx.fillText(type.toUpperCase(), pad + stripeWidth + 10, pad + 18);
+
+    // Content text (brighter, larger)
+    ctx.shadowColor = `rgba(${r}, ${g}, ${b}, 0.4)`;
+    ctx.shadowBlur = 6;
+    ctx.font = 'bold 20px JetBrains Mono, monospace';
+    ctx.fillStyle = `rgba(255, 255, 255, 0.95)`;
+    ctx.fillText(content.substring(0, 35), pad + stripeWidth + 10, h - pad - 16);
 
     const texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
@@ -1842,19 +3043,19 @@ export class VisualEngine {
       map: texture,
       transparent: true,
       opacity: 0.9,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
 
-    // Larger plane for event fragments
-    const geometry = new THREE.PlaneGeometry(80, 10);
+    // Panel geometry
+    const geometry = new THREE.PlaneGeometry(70, 11);
     const mesh = new THREE.Mesh(geometry, material);
 
     // Spawn at random position on the periphery
     const angle = Math.random() * Math.PI * 2;
-    const radius = 120 + Math.random() * 40;
-    const height = (Math.random() - 0.5) * 80;
+    const radius = 110 + Math.random() * 30;
+    const height = (Math.random() - 0.5) * 60;
 
     const position = new THREE.Vector3(
       Math.sin(angle) * radius,
@@ -1864,20 +3065,45 @@ export class VisualEngine {
     mesh.position.copy(position);
 
     this.dataFragmentMeshes.add(mesh);
+
+    // Create connection line to source if provided
+    let connectionLine: THREE.Line | undefined;
+    const sourcePosition = sourcePos?.clone();
+    if (sourcePosition) {
+      const lineGeom = new THREE.BufferGeometry().setFromPoints([
+        sourcePosition,
+        position
+      ]);
+      // Brighter line color for visibility
+      const lineColor = color.clone();
+      lineColor.offsetHSL(0, 0, 0.2);  // Lighten
+      const lineMat = new THREE.LineBasicMaterial({
+        color: lineColor,
+        transparent: true,
+        opacity: 0.7,  // Much more visible
+        blending: THREE.AdditiveBlending,
+      });
+      connectionLine = new THREE.Line(lineGeom, lineMat);
+      this.scene.add(connectionLine);
+    }
+
     this.dataFragments.push({
       position: position.clone(),
       velocity: new THREE.Vector3(
-        Math.sin(angle) * 3,  // Drift outward
-        2 + Math.random() * 3,
-        Math.cos(angle) * 2
+        Math.sin(angle) * 8,     // Faster outward drift
+        4 + Math.random() * 4,  // Faster upward drift
+        Math.cos(angle) * 6
       ),
       text: content,
       color,
       lifetime: 0,
-      maxLifetime: 5 + Math.random() * 3,
-      scale: 1.2,
+      maxLifetime: 3 + Math.random() * 2,  // Shorter lifetime: 3-5 seconds
+      scale: 1,
       rotation: 0,
       rotationSpeed: 0,
+      sourcePosition,
+      mesh,
+      connectionLine,
     });
   }
 
@@ -1912,9 +3138,34 @@ export class VisualEngine {
       const x = rotatedPos.x * cos - rotatedPos.z * sin;
       const z = rotatedPos.x * sin + rotatedPos.z * cos;
 
-      positions.array[i * 3] = x + noiseX;
-      positions.array[i * 3 + 1] = rotatedPos.y + noiseY;
-      positions.array[i * 3 + 2] = z + noiseZ;
+      // Apply global breath - particles expand/contract with icosahedron
+      let breathedX = x * this.globalBreathScale;
+      let breathedY = rotatedPos.y * this.globalBreathScale;
+      let breathedZ = z * this.globalBreathScale;
+
+      // === TESSERACT DISRUPTION ===
+      // Scatter particles outward when tesseract is active
+      if (this.tesseractActive && this.tesseractIntensity > 0.1) {
+        const dist = Math.sqrt(breathedX * breathedX + breathedY * breathedY + breathedZ * breathedZ);
+        const len = dist || 1;
+
+        // Outward push - stronger near center
+        const pushStrength = this.tesseractIntensity * 15 * (1 - dist / (this.spread * 2));
+        const scatter = Math.sin(this.time * 20 + i * 0.5) * this.tesseractIntensity * 3;
+
+        breathedX += (breathedX / len) * (pushStrength + scatter);
+        breathedY += (breathedY / len) * (pushStrength + scatter * 0.5);
+        breathedZ += (breathedZ / len) * (pushStrength + scatter);
+
+        // Add chaotic jitter
+        breathedX += (Math.random() - 0.5) * this.tesseractIntensity * 4;
+        breathedY += (Math.random() - 0.5) * this.tesseractIntensity * 4;
+        breathedZ += (Math.random() - 0.5) * this.tesseractIntensity * 4;
+      }
+
+      positions.array[i * 3] = breathedX + noiseX;
+      positions.array[i * 3 + 1] = breathedY + noiseY;
+      positions.array[i * 3 + 2] = breathedZ + noiseZ;
 
       // Color transition
       p.color.lerp(p.targetColor, dt * 3);
@@ -2120,7 +3371,7 @@ export class VisualEngine {
 
   // === THREAT HANDLERS ===
 
-  private spawnThreat(threatType: string, burstSize: number = 1, label?: string, extraData?: string) {
+  private spawnThreat(threatType: string, burstSize: number = 1, label?: string, extraData?: string): THREE.Vector3 | null {
     const colorFn = THREAT_COLORS[threatType];
     const color = new THREE.Color(colorFn ? colorFn() : 0xffffff);
     this.tension = Math.min(1, this.tension + 0.06 * burstSize);
@@ -2167,8 +3418,16 @@ export class VisualEngine {
 
     // Spawn 3D floating data fragment with extra info
     if (spawnPos && extraData && Math.random() < 0.7) {
-      this.spawnDataFragment(extraData, spawnPos, color);
+      // Offset the fragment position from the source
+      const fragmentPos = spawnPos.clone();
+      fragmentPos.x += (Math.random() - 0.5) * 15;
+      fragmentPos.y += 5 + Math.random() * 10;
+      fragmentPos.z += (Math.random() - 0.5) * 10;
+      // Pass source position for connection line
+      this.spawnDataFragment(extraData, fragmentPos, color, spawnPos);
     }
+
+    return spawnPos;
   }
 
   private addFloatingLabel(worldPos: THREE.Vector3, text: string, color: THREE.Color) {
@@ -2185,6 +3444,7 @@ export class VisualEngine {
       opacity: 0;
       transform: translateY(10px);
       transition: opacity 0.2s, transform 0.2s;
+      pointer-events: none;
     `;
     this.labelContainer.appendChild(el);
     requestAnimationFrame(() => {
@@ -2200,8 +3460,63 @@ export class VisualEngine {
     });
   }
 
-  // Public handlers - with 3D data fragments
-  handleMalwareUrl(hit: URLhausHit) {
+  // Public: Spawn a geographic country label near an event
+  spawnGeoLabel(worldPos: THREE.Vector3, country: string, severity: 'critical' | 'high' | 'medium' | 'low' = 'medium') {
+    if (this.isMobileDevice) return;
+    if (!country || country.length < 2) return;
+
+    // Limit concurrent geo labels
+    const geoLabelCount = this.floatingLabels.filter(l => l.element.classList.contains('geo-label')).length;
+    if (geoLabelCount >= 8) return;
+
+    // Severity colors
+    const severityColors: Record<string, string> = {
+      critical: '#ff0044',
+      high: '#ff6600',
+      medium: '#33ff66',
+      low: '#44aaaa',
+    };
+    const color = severityColors[severity] || severityColors.medium;
+
+    const el = document.createElement('div');
+    el.className = 'geo-label';
+    el.innerHTML = `<span class="geo-icon">◎</span> ${country.toUpperCase()}`;
+    el.style.cssText = `
+      position: absolute;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: ${severity === 'critical' ? '14px' : severity === 'high' ? '12px' : '11px'};
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      color: ${color};
+      text-shadow: 0 0 8px ${color}, 0 0 16px ${color}40;
+      white-space: nowrap;
+      opacity: 0;
+      transform: translateY(8px) scale(0.9);
+      transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+      pointer-events: none;
+      z-index: 20;
+    `;
+
+    this.labelContainer.appendChild(el);
+    requestAnimationFrame(() => {
+      el.style.opacity = '1';
+      el.style.transform = 'translateY(0) scale(1)';
+    });
+
+    // Offset slightly upward so it appears above the event
+    const offsetPos = worldPos.clone();
+    offsetPos.y += 15;
+
+    this.floatingLabels.push({
+      element: el,
+      worldPos: offsetPos,
+      lifetime: 0,
+      maxLifetime: severity === 'critical' ? 4 : severity === 'high' ? 3.5 : 3,
+    });
+  }
+
+  // Public handlers - with 3D data fragments (return spawn position for connection lines)
+  handleMalwareUrl(hit: URLhausHit): THREE.Vector3 | null {
     let domain = 'unknown';
     try {
       if (hit.url) domain = new URL(hit.url).hostname;
@@ -2209,14 +3524,15 @@ export class VisualEngine {
     const info = hit.threat || domain;
     // Generate hex-like hash fragment for visual interest
     const hexFragment = Math.random().toString(16).substring(2, 10).toUpperCase();
-    this.spawnThreat('malware', 3, `MALWARE: ${info}`, `0x${hexFragment}`);
+    const pos = this.spawnThreat('malware', 3, `MALWARE: ${info}`, `0x${hexFragment}`);
     if (hit.url && Math.random() < 0.5) {
       this.spawnThreat('malware', 1, domain, hit.url?.substring(0, 40));
     }
+    return pos;
   }
 
-  handleGreyNoise(data: GreyNoiseData) {
-    this.spawnThreat('scanner', 1, `SCAN: ${data.scannerCount || '?'}`, data.topTags?.[0]);
+  handleGreyNoise(data: GreyNoiseData): THREE.Vector3 | null {
+    return this.spawnThreat('scanner', 1, `SCAN: ${data.scannerCount || '?'}`, data.topTags?.[0]);
   }
 
   updateScannerNoise(data: GreyNoiseData) {
@@ -2226,20 +3542,20 @@ export class VisualEngine {
     }
   }
 
-  handleHoneypotAttack(attack: DShieldAttack) {
+  handleHoneypotAttack(attack: DShieldAttack): THREE.Vector3 | null {
     const info = attack.sourceIp
       ? `${attack.sourceIp}`
       : attack.attackType || 'HONEYPOT';
-    this.spawnThreat('honeypot', 2, info, attack.targetPort ? `PORT:${attack.targetPort}` : undefined);
+    return this.spawnThreat('honeypot', 2, info, attack.targetPort ? `PORT:${attack.targetPort}` : undefined);
   }
 
-  handleBotnetC2(c2: FeodoC2) {
+  handleBotnetC2(c2: FeodoC2): THREE.Vector3 | null {
     const info = c2.malware || 'BOTNET';
-    this.spawnThreat('c2', 4, `C2: ${info}`, c2.ip ? `${c2.ip}:${c2.port}` : undefined);
+    return this.spawnThreat('c2', 4, `C2: ${info}`, c2.ip ? `${c2.ip}:${c2.port}` : undefined);
   }
 
-  handleRansomwareVictim(victim: RansomwareVictim) {
-    this.spawnThreat('ransomware', 8, `${victim.group}`, victim.domain);
+  handleRansomwareVictim(victim: RansomwareVictim): THREE.Vector3 | null {
+    const pos = this.spawnThreat('ransomware', 8, `${victim.group}`, victim.domain);
     this.tension = Math.min(1, this.tension + 0.2);
     // Delayed secondary info
     if (victim.victim) {
@@ -2247,31 +3563,32 @@ export class VisualEngine {
         this.spawnThreat('ransomware', 2, victim.victim, victim.sector);
       }, 400);
     }
+    return pos;
   }
 
-  handlePhishing(phish: PhishingURL) {
+  handlePhishing(phish: PhishingURL): THREE.Vector3 | null {
     const target = phish.targetBrand || 'PHISH';
-    this.spawnThreat('phishing', 2, target, phish.domain);
+    return this.spawnThreat('phishing', 2, target, phish.domain);
   }
 
-  handleMaliciousCert(entry: SSLBlacklistEntry) {
+  handleMaliciousCert(entry: SSLBlacklistEntry): THREE.Vector3 | null {
     const info = entry.malware || 'BAD CERT';
-    this.spawnThreat('cert', 2, info, entry.sha1?.substring(0, 16));
+    return this.spawnThreat('cert', 2, info, entry.sha1?.substring(0, 16));
   }
 
-  handleBruteforce(attack: BruteforceAttack) {
-    this.spawnThreat('bruteforce', 2, attack.sourceIp || 'BRUTE', attack.service?.toUpperCase());
+  handleBruteforce(attack: BruteforceAttack): THREE.Vector3 | null {
+    return this.spawnThreat('bruteforce', 2, attack.sourceIp || 'BRUTE', attack.service?.toUpperCase());
   }
 
-  handleTorNode(node: TorExitNode) {
-    this.spawnThreat('tor', 1, node.nickname || 'TOR', node.fingerprint?.substring(0, 12));
+  handleTorNode(node: TorExitNode): THREE.Vector3 | null {
+    return this.spawnThreat('tor', 1, node.nickname || 'TOR', node.fingerprint?.substring(0, 12));
   }
 
-  handleBreach(breach: HIBPBreach) {
+  handleBreach(breach: HIBPBreach): THREE.Vector3 | null {
     const countStr = breach.pwnCount > 1000000
       ? `${(breach.pwnCount / 1000000).toFixed(1)}M`
       : `${(breach.pwnCount / 1000).toFixed(0)}K`;
-    this.spawnThreat('breach', 10, breach.title, `${countStr} RECORDS`);
+    const pos = this.spawnThreat('breach', 10, breach.title, `${countStr} RECORDS`);
     this.tension = Math.min(1, this.tension + 0.3);
 
     // Spawn multiple data fragments for major breaches
@@ -2281,16 +3598,17 @@ export class VisualEngine {
         this.spawnThreat('breach', 3, dataTypes);
       }, 300);
     }
+    return pos;
   }
 
-  handleSpamhaus(drop: SpamhausDrop) {
-    this.spawnThreat('hijack', 3, drop.cidr, `${drop.numAddresses} IPs`);
+  handleSpamhaus(drop: SpamhausDrop): THREE.Vector3 | null {
+    return this.spawnThreat('hijack', 3, drop.cidr, `${drop.numAddresses} IPs`);
   }
 
-  handleBGPEvent(event: BGPEvent) {
+  handleBGPEvent(event: BGPEvent): THREE.Vector3 | null {
     const burst = event.severity === 'critical' ? 6 : event.severity === 'high' ? 4 : 2;
     const type = event.eventType?.toUpperCase() || 'BGP';
-    this.spawnThreat('bgp', burst, `${type}: ${event.prefix}`, event.asNumber ? `AS${event.asNumber}` : undefined);
+    return this.spawnThreat('bgp', burst, `${type}: ${event.prefix}`, event.asNumber ? `AS${event.asNumber}` : undefined);
   }
 
   // === PUBLIC API ===
@@ -2321,10 +3639,8 @@ export class VisualEngine {
       this.rainMaterial.uniforms.themeColor = { value: new THREE.Color(theme.rain) };
     }
 
-    // Update bloom intensity
-    if (this.bloomPass) {
-      this.bloomPass.strength = 1.8 * theme.bloom;
-    }
+    // Update bloom intensity (base is set dynamically in render loop, this just adjusts for theme)
+    // Theme bloom multipliers are relative - the render loop handles actual values
 
     // Store visualizer settings for use in updateVisualizer
     this.visualizerHue = theme.visualizer.hue;
@@ -2361,12 +3677,19 @@ export class VisualEngine {
     if (this.visualizerCanvas) {
       this.visualizerCanvas.width = w;
     }
+
+    // Resize data stream canvas
+    if (this.dataStreamCanvas) {
+      this.dataStreamCanvas.width = w;
+      this.dataStreamCanvas.height = h;
+    }
   }
 
   dispose() {
     this.labelContainer.remove();
     this.formationLabel.remove();
     if (this.visualizerCanvas) this.visualizerCanvas.remove();
+    if (this.dataStreamCanvas) this.dataStreamCanvas.remove();
     this.particleGeometry.dispose();
     this.particleMaterial.dispose();
     this.lineGeometry.dispose();

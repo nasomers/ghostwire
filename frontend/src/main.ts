@@ -78,6 +78,11 @@ const threatClose = document.getElementById('threat-close')!;
 const MAX_FEED_EVENTS = 50;
 const MAX_TICKER_ITEMS = 20;
 
+// Ticker scroll state
+let tickerScrollPos = 0;
+const TICKER_SCROLL_SPEED = 50; // pixels per second
+let tickerPaused = false;
+
 // Country code to screen position (percentage from top-left)
 // Based on simple mercator-ish projection
 const COUNTRY_SCREEN_POS: Record<string, [number, number]> = {
@@ -143,6 +148,36 @@ const eventCounts = {
   hibp: 0,
   spamhaus: 0,
   bgp: 0
+};
+
+// HUD tracking
+let totalBreachRecords = 0;
+let eventTimestamps: number[] = [];  // For events/min calculation
+
+// Enhanced threat feed tracking
+interface ThreatFeedItem {
+  type: string;
+  content: string;
+  severity: Severity;
+  country?: string;
+  count: number;
+  lastTime: number;
+  actor?: string;  // Threat actor/group name
+  details?: Record<string, string>;  // Extra details for expand view
+  sparkline: number[];  // Last 12 time buckets (5s each = 60s)
+}
+
+const threatFeedItems: Map<string, ThreatFeedItem> = new Map();
+const sparklineHistory: Map<string, number[]> = new Map();  // Per-type event counts
+const SPARKLINE_BUCKETS = 12;  // 12 x 5 seconds = 60 seconds
+const SPARKLINE_INTERVAL = 5000;  // 5 seconds per bucket
+let lastSparklineUpdate = Date.now();
+
+// Known threat actors/groups
+const KNOWN_ACTORS: Record<string, string[]> = {
+  ransomware: ['LockBit', 'BlackCat', 'Cl0p', 'Play', 'Royal', 'Akira', 'BianLian', 'Medusa', 'NoEscape', '8Base', 'Rhysida', 'Hunters', 'Cactus', 'BlackBasta'],
+  malware: ['Emotet', 'QakBot', 'IcedID', 'Raccoon', 'RedLine', 'Vidar', 'AsyncRAT', 'AgentTesla', 'FormBook', 'Snake', 'PikaBot', 'DarkGate'],
+  c2: ['Cobalt Strike', 'Metasploit', 'Sliver', 'Brute Ratel', 'Havoc', 'PoshC2', 'Mythic'],
 };
 
 // Last seen details for each event type
@@ -218,36 +253,244 @@ function addFeedEvent(
   feedPulse.style.animation = '';
 }
 
-// Add event to the scrolling ticker at top
+// Detect threat actor from content
+function detectThreatActor(type: string, content: string): string | undefined {
+  const actors = KNOWN_ACTORS[type];
+  if (!actors) return undefined;
+  const contentLower = content.toLowerCase();
+  return actors.find(actor => contentLower.includes(actor.toLowerCase()));
+}
+
+// Generate sparkline SVG path
+function generateSparkline(data: number[], _color: string): string {
+  if (!data.length) return '';
+  const max = Math.max(...data, 1);
+  const width = 60;
+  const height = 16;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * width;
+    const y = height - (v / max) * (height - 2) - 1; // Leave 1px margin
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  // Color is applied via CSS class on parent element
+  return `<svg viewBox="0 0 ${width} ${height}"><path d="M${points.replace(/ /g, ' L')}" /></svg>`;
+}
+
+// Update ticker continuous scroll
+function updateTickerScroll(deltaTime: number) {
+  if (!tickerContent || tickerPaused) return;
+
+  const contentWidth = tickerContent.scrollWidth;
+  const containerWidth = threatTicker?.clientWidth || window.innerWidth;
+
+  // Only scroll if content is wider than container
+  if (contentWidth <= containerWidth) {
+    tickerScrollPos = 0;
+    tickerContent.style.transform = 'translateX(0)';
+    return;
+  }
+
+  // Move scroll position
+  tickerScrollPos += TICKER_SCROLL_SPEED * deltaTime;
+
+  // When an item fully scrolls off the left, move it to the end
+  const firstChild = tickerContent.firstElementChild as HTMLElement;
+  if (firstChild) {
+    const itemWidth = firstChild.offsetWidth;
+    if (tickerScrollPos >= itemWidth) {
+      // Move this item to the end
+      tickerContent.appendChild(firstChild);
+      tickerScrollPos -= itemWidth;
+    }
+  }
+
+  tickerContent.style.transform = `translateX(${-tickerScrollPos}px)`;
+}
+
+// Add event to the enhanced horizontal ticker
 function addTickerItem(
   type: string,
   content: string,
   severity: Severity,
-  country?: string
+  country?: string,
+  details?: Record<string, string>
 ) {
   if (!tickerContent) return;
 
-  const item = document.createElement('div');
-  item.className = `ticker-item${severity === 'critical' ? ' critical' : ''}`;
+  // Update sparkline history for this type
+  if (!sparklineHistory.has(type)) {
+    sparklineHistory.set(type, new Array(SPARKLINE_BUCKETS).fill(0));
+  }
+  const typeSparkline = sparklineHistory.get(type)!;
+  typeSparkline[typeSparkline.length - 1]++;
 
-  const time = new Date();
-  const timeStr = time.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  // Create grouping key (type + truncated content for similar events)
+  const contentKey = content.split(/[→:]/).pop()?.trim().substring(0, 25) || content.substring(0, 25);
+  const groupKey = `${type}:${contentKey}`;
 
-  item.innerHTML = `
-    <span class="ticker-type ${type}">${type.toUpperCase()}</span>
-    <span class="ticker-content">${content}</span>
-    ${country ? `<span class="ticker-country">${country}</span>` : ''}
-    <span class="ticker-time">${timeStr}</span>
-  `;
+  const now = Date.now();
+  const actor = detectThreatActor(type, content);
 
-  // Add to end of ticker
-  tickerContent.appendChild(item);
+  // Check if we should group with existing item in ticker
+  const existing = threatFeedItems.get(groupKey);
+  const existingElement = tickerContent.querySelector(`[data-key="${groupKey}"]`) as HTMLElement;
 
-  // Trim old items
-  while (tickerContent.children.length > MAX_TICKER_ITEMS) {
-    tickerContent.removeChild(tickerContent.firstChild!);
+  if (existing && existingElement && (now - existing.lastTime) < 30000) {
+    // Update existing item count
+    existing.count++;
+    existing.lastTime = now;
+    existing.content = content;
+    if (country) existing.country = country;
+    if (actor) existing.actor = actor;
+    existing.sparkline = [...typeSparkline];
+
+    // Update the DOM element
+    const countBadge = existingElement.querySelector('.ticker-count');
+    if (countBadge) {
+      countBadge.textContent = `×${existing.count}`;
+      countBadge.className = `ticker-count${existing.count >= 10 ? ' critical' : existing.count >= 5 ? ' high' : ''}`;
+    } else if (existing.count > 1) {
+      // Add count badge
+      const badge = document.createElement('span');
+      badge.className = 'ticker-count';
+      badge.textContent = `×${existing.count}`;
+      existingElement.querySelector('.ticker-type')?.after(badge);
+    }
+
+    // Flash the item to indicate update
+    existingElement.classList.add('ticker-updated');
+    setTimeout(() => existingElement.classList.remove('ticker-updated'), 300);
+  } else {
+    // Create new item
+    threatFeedItems.set(groupKey, {
+      type,
+      content,
+      severity,
+      country,
+      count: 1,
+      lastTime: now,
+      actor,
+      details,
+      sparkline: [...typeSparkline],
+    });
+
+    const item = document.createElement('div');
+    item.className = `ticker-item${severity === 'critical' ? ' critical' : severity === 'high' ? ' high' : ''}`;
+    item.setAttribute('data-key', groupKey);
+
+    const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' });
+    item.innerHTML = `
+      <span class="ticker-type ${type}">${type.toUpperCase()}</span>
+      ${actor ? `<span class="ticker-actor">${actor}</span>` : ''}
+      <span class="ticker-content">${content}</span>
+      ${country ? `<span class="ticker-country">${country}</span>` : ''}
+      <span class="ticker-time">${timeStr}</span>
+    `;
+
+    // Click to expand
+    item.addEventListener('click', () => expandTickerItem(groupKey));
+
+    tickerContent.appendChild(item);
+
+    // Limit ticker items
+    while (tickerContent.children.length > MAX_TICKER_ITEMS) {
+      const removed = tickerContent.firstChild as HTMLElement;
+      const removedKey = removed?.getAttribute('data-key');
+      if (removedKey) threatFeedItems.delete(removedKey);
+      tickerContent.removeChild(removed);
+    }
   }
 }
+
+// Expand ticker item to show details modal
+function expandTickerItem(key: string) {
+  const item = threatFeedItems.get(key);
+  if (!item) return;
+
+  // Color map for sparklines
+  const typeColors: Record<string, string> = {
+    ransomware: '#ff0066', malware: '#ff3344', c2: '#aa44ff',
+    honeypot: '#ff6600', phishing: '#00ccff', bruteforce: '#ffaa00',
+    tor: '#22aa44', cert: '#6644ff', breach: '#ff0044',
+    hijack: '#ff3300', bgp: '#cc00ff',
+  };
+  const sparklineColor = typeColors[item.type] || '#33ff66';
+
+  // Generate sparkline for modal
+  const sparklineSvg = item.sparkline.length > 0 ? (() => {
+    const data = item.sparkline;
+    const max = Math.max(...data, 1);
+    const width = 400;
+    const height = 40;
+    const points = data.map((v, i) => {
+      const x = (i / (data.length - 1)) * width;
+      const y = height - (v / max) * (height - 4) - 2;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' L');
+    return `<svg viewBox="0 0 ${width} ${height}"><path d="M${points}" fill="none" stroke="${sparklineColor}" stroke-width="2" /></svg>`;
+  })() : '';
+
+  const modal = document.getElementById('threat-detail-modal');
+  if (modal) {
+    modal.innerHTML = `
+      <div class="modal-header">
+        <div class="modal-title">
+          <span class="modal-type ${item.type}">${item.type.toUpperCase()}</span>
+          ${item.actor ? `<span class="modal-actor">${item.actor}</span>` : ''}
+        </div>
+        <button class="modal-close" onclick="closeThreatModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-content-text">${item.content}</div>
+        <div class="modal-meta">
+          ${item.country ? `<div class="modal-meta-item"><span class="modal-meta-label">Location</span><span class="modal-meta-value">${item.country}</span></div>` : ''}
+          <div class="modal-meta-item">
+            <span class="modal-meta-label">Event Count</span>
+            <span class="modal-meta-value">${item.count} in last 30s</span>
+          </div>
+          <div class="modal-meta-item">
+            <span class="modal-meta-label">Severity</span>
+            <span class="modal-meta-value">${item.severity.toUpperCase()}</span>
+          </div>
+          <div class="modal-meta-item">
+            <span class="modal-meta-label">Last Seen</span>
+            <span class="modal-meta-value">${new Date(item.lastTime).toLocaleTimeString()}</span>
+          </div>
+        </div>
+        ${sparklineSvg ? `
+        <div class="modal-sparkline ${item.type}">
+          <div class="modal-sparkline-label">Activity (last 60s)</div>
+          ${sparklineSvg}
+        </div>` : ''}
+      </div>
+      <div class="modal-footer">
+        <button class="modal-close-btn" onclick="closeThreatModal()">Close</button>
+      </div>
+    `;
+    modal.classList.add('visible');
+  }
+}
+
+// Update sparkline buckets periodically
+function updateSparklineBuckets() {
+  const now = Date.now();
+  if (now - lastSparklineUpdate >= SPARKLINE_INTERVAL) {
+    lastSparklineUpdate = now;
+    // Shift all sparklines and add new empty bucket
+    sparklineHistory.forEach((buckets, type) => {
+      buckets.shift();
+      buckets.push(0);
+    });
+  }
+}
+
+(window as any).closeThreatModal = function() {
+  const modal = document.getElementById('threat-detail-modal');
+  if (modal) {
+    modal.classList.remove('visible');
+  }
+};
 
 // Boot sequence messages
 const BOOT_SEQUENCE = [
@@ -355,16 +598,23 @@ function initSocket() {
     try {
       const audioReady = audio.isInitialized();
 
+      // Track event timestamps for events/min calculation
+      const now = Date.now();
+      eventTimestamps.push(now);
+      // Keep only last 60 seconds of timestamps
+      const oneMinuteAgo = now - 60000;
+      eventTimestamps = eventTimestamps.filter(t => t > oneMinuteAgo);
+
       switch (event.type) {
         case 'urlhaus': {
           const hit = event.data as URLhausHit;
           eventCounts.urlhaus++;
           if (audioReady) audio.playMalwareUrl(hit);
-          visuals.handleMalwareUrl(hit);
+          const pos = visuals.handleMalwareUrl(hit);
           const threat = hit.threat || 'malware';
           lastSeen.urlhaus = threat;
           // 3D floating text + ticker
-          visuals.spawnEventFragment('malware', `${threat}: ${hit.host}`, 'high');
+          visuals.spawnEventFragment('malware', `${threat}: ${hit.host}`, 'high', pos ?? undefined);
           addTickerItem('malware', `${threat} → ${hit.host}`, 'high');
           break;
         }
@@ -383,10 +633,12 @@ function initSocket() {
           const attack = event.data as DShieldAttack;
           eventCounts.dshield++;
           if (audioReady) audio.playHoneypotAttack(attack);
-          visuals.handleHoneypotAttack(attack);
+          const pos = visuals.handleHoneypotAttack(attack);
           lastSeen.dshield = `port ${attack.targetPort}`;
           const countryName = attack.country ? COUNTRY_NAMES[attack.country] || attack.country : '';
-          visuals.spawnEventFragment('honeypot', `${attack.attackType || 'Attack'} :${attack.targetPort}`, 'medium');
+          visuals.spawnEventFragment('honeypot', `${attack.attackType || 'Attack'} :${attack.targetPort}`, 'medium', pos ?? undefined);
+          // Geographic label
+          if (pos && countryName) visuals.spawnGeoLabel(pos, countryName, 'medium');
           addTickerItem('honeypot', `${attack.attackType || 'Attack'} on port ${attack.targetPort}`, 'medium', countryName);
           break;
         }
@@ -395,10 +647,12 @@ function initSocket() {
           const c2 = event.data as FeodoC2;
           eventCounts.feodo++;
           if (audioReady) audio.playBotnetC2(c2);
-          visuals.handleBotnetC2(c2);
+          const pos = visuals.handleBotnetC2(c2);
           lastSeen.feodo = c2.malware || 'Botnet';
           const c2Country = c2.country ? COUNTRY_NAMES[c2.country] || c2.country : '';
-          visuals.spawnEventFragment('c2', `${c2.malware || 'C2'} ${c2.ip}:${c2.port}`, 'high');
+          visuals.spawnEventFragment('c2', `${c2.malware || 'C2'} ${c2.ip}:${c2.port}`, 'high', pos ?? undefined);
+          // Geographic label
+          if (pos && c2Country) visuals.spawnGeoLabel(pos, c2Country, 'high');
           addTickerItem('c2', `${c2.malware || 'Botnet'} C2 active: ${c2.ip}`, 'high', c2Country);
           break;
         }
@@ -407,11 +661,15 @@ function initSocket() {
           const victim = event.data as RansomwareVictim;
           eventCounts.ransomware++;
           if (audioReady) audio.playRansomwareVictim(victim);
-          visuals.handleRansomwareVictim(victim);
+          const pos = visuals.handleRansomwareVictim(victim);
           lastSeen.ransomware = victim.group;
           const victimCountry = victim.country ? COUNTRY_NAMES[victim.country] || victim.country : '';
-          visuals.spawnEventFragment('ransomware', `${victim.group}: ${victim.victim}`, 'critical');
+          visuals.spawnEventFragment('ransomware', `${victim.group}: ${victim.victim}`, 'critical', pos ?? undefined);
+          // Geographic label - always show for ransomware (critical)
+          if (pos && victimCountry) visuals.spawnGeoLabel(pos, victimCountry, 'critical');
           addTickerItem('ransomware', `${victim.group} → ${victim.victim}`, 'critical', victimCountry);
+          // Trigger tesseract glitch for ransomware
+          visuals.triggerTesseractGlitch(1.0);
           break;
         }
 
@@ -419,10 +677,10 @@ function initSocket() {
           const phish = event.data as PhishingURL;
           eventCounts.phishing++;
           if (audioReady) audio.playPhishing(phish);
-          visuals.handlePhishing(phish);
+          const pos = visuals.handlePhishing(phish);
           lastSeen.phishing = phish.targetBrand || phish.domain;
           const phishContent = phish.targetBrand ? `${phish.targetBrand} → ${phish.domain}` : phish.domain;
-          visuals.spawnEventFragment('phishing', phishContent, 'medium');
+          visuals.spawnEventFragment('phishing', phishContent, 'medium', pos ?? undefined);
           addTickerItem('phishing', phishContent, 'medium');
           break;
         }
@@ -431,9 +689,9 @@ function initSocket() {
           const entry = event.data as SSLBlacklistEntry;
           eventCounts.sslbl++;
           if (audioReady) audio.playMaliciousCert(entry);
-          visuals.handleMaliciousCert(entry);
+          const pos = visuals.handleMaliciousCert(entry);
           lastSeen.sslbl = entry.malware;
-          visuals.spawnEventFragment('cert', `${entry.malware}`, 'medium');
+          visuals.spawnEventFragment('cert', `${entry.malware}`, 'medium', pos ?? undefined);
           addTickerItem('cert', `${entry.malware} - ${entry.listingReason}`, 'medium');
           break;
         }
@@ -442,11 +700,13 @@ function initSocket() {
           const attack = event.data as BruteforceAttack;
           eventCounts.bruteforce++;
           if (audioReady) audio.playBruteforce(attack);
-          visuals.handleBruteforce(attack);
+          const pos = visuals.handleBruteforce(attack);
           const attackType = attack.attackType || 'SSH';
           lastSeen.bruteforce = attackType;
           const bfCountry = attack.country ? COUNTRY_NAMES[attack.country] || attack.country : '';
-          visuals.spawnEventFragment('bruteforce', `${attackType} ${attack.ip}`, 'low');
+          visuals.spawnEventFragment('bruteforce', `${attackType} ${attack.ip}`, 'low', pos ?? undefined);
+          // Geographic label - occasional for brute force (frequent events)
+          if (pos && bfCountry && Math.random() < 0.3) visuals.spawnGeoLabel(pos, bfCountry, 'low');
           addTickerItem('bruteforce', `${attackType} brute force from ${attack.ip}`, 'low', bfCountry);
           break;
         }
@@ -455,12 +715,14 @@ function initSocket() {
           const node = event.data as TorExitNode;
           eventCounts.tor++;
           if (audioReady) audio.playTorNode(node);
-          visuals.handleTorNode(node);
+          const pos = visuals.handleTorNode(node);
           lastSeen.tor = node.nickname || node.ip;
           const torCountry = node.country ? COUNTRY_NAMES[node.country] || node.country : '';
           // Tor nodes are frequent - only spawn 3D text occasionally
           if (Math.random() < 0.3) {
-            visuals.spawnEventFragment('tor', node.nickname || node.ip, 'low');
+            visuals.spawnEventFragment('tor', node.nickname || node.ip, 'low', pos ?? undefined);
+            // Geographic label for tor
+            if (pos && torCountry) visuals.spawnGeoLabel(pos, torCountry, 'low');
           }
           addTickerItem('tor', `Exit node: ${node.nickname || node.ip}`, 'low', torCountry);
           break;
@@ -469,12 +731,15 @@ function initSocket() {
         case 'hibp': {
           const breach = event.data as HIBPBreach;
           eventCounts.hibp++;
+          totalBreachRecords += breach.pwnCount;  // Track total records
           if (audioReady) audio.playBreach(breach);
-          visuals.handleBreach(breach);
+          const pos = visuals.handleBreach(breach);
           lastSeen.hibp = breach.title;
           const pwnCount = breach.pwnCount.toLocaleString();
-          visuals.spawnEventFragment('breach', `${breach.title}: ${pwnCount} pwned`, 'critical');
+          visuals.spawnEventFragment('breach', `${breach.title}: ${pwnCount} pwned`, 'critical', pos ?? undefined);
           addTickerItem('breach', `${breach.title} breach: ${pwnCount} accounts`, 'critical');
+          // Trigger tesseract glitch for major breaches
+          visuals.triggerTesseractGlitch(breach.pwnCount > 1000000 ? 1.0 : 0.5);
           break;
         }
 
@@ -482,10 +747,10 @@ function initSocket() {
           const drop = event.data as SpamhausDrop;
           eventCounts.spamhaus++;
           if (audioReady) audio.playSpamhaus(drop);
-          visuals.handleSpamhaus(drop);
+          const pos = visuals.handleSpamhaus(drop);
           lastSeen.spamhaus = drop.cidr;
           const addrCount = drop.numAddresses.toLocaleString();
-          visuals.spawnEventFragment('hijack', `${drop.cidr} (${addrCount} IPs)`, 'high');
+          visuals.spawnEventFragment('hijack', `${drop.cidr} (${addrCount} IPs)`, 'high', pos ?? undefined);
           addTickerItem('hijack', `Hijacked: ${drop.cidr} (${addrCount} IPs)`, 'high');
           break;
         }
@@ -494,12 +759,12 @@ function initSocket() {
           const bgpEvent = event.data as BGPEvent;
           eventCounts.bgp++;
           if (audioReady) audio.playBGPEvent(bgpEvent);
-          visuals.handleBGPEvent(bgpEvent);
+          const pos = visuals.handleBGPEvent(bgpEvent);
           lastSeen.bgp = bgpEvent.prefix;
           const severity = bgpEvent.severity === 'critical' ? 'critical' :
                           bgpEvent.severity === 'high' ? 'high' : 'medium';
           const asName = bgpEvent.asName || `AS${bgpEvent.asn}`;
-          visuals.spawnEventFragment('bgp', `${bgpEvent.eventType}: ${bgpEvent.prefix}`, severity);
+          visuals.spawnEventFragment('bgp', `${bgpEvent.eventType}: ${bgpEvent.prefix}`, severity, pos ?? undefined);
           addTickerItem('bgp', `${bgpEvent.eventType.toUpperCase()}: ${bgpEvent.prefix} via ${asName}`, severity);
           break;
         }
@@ -544,14 +809,15 @@ async function start() {
   // Stats panel hidden - using 3D holographic HUD instead
   // document.getElementById('stats')?.classList.add('visible');
   document.getElementById('controls-container')?.classList.add('visible');
-  // Event feed hidden - using 3D floating text + ticker instead
-  // document.getElementById('event-feed')?.classList.add('visible');
   document.getElementById('instructions')?.classList.add('visible');
 
   // Show threat ticker at top of screen
   if (threatTicker) {
     threatTicker.classList.remove('hidden');
     threatTicker.classList.add('visible');
+    // Pause scroll on hover
+    threatTicker.addEventListener('mouseenter', () => { tickerPaused = true; });
+    threatTicker.addEventListener('mouseleave', () => { tickerPaused = false; });
   }
 
   // Initialize audio separately - if it fails, visuals still work
@@ -583,6 +849,12 @@ function renderLoop(currentTime: number) {
     // Always update and render visuals
     visuals.update(deltaTime);
     visuals.render();
+
+    // Update sparkline time buckets
+    updateSparklineBuckets();
+
+    // Update ticker scroll
+    updateTickerScroll(deltaTime);
 
     // Update stats display
     updateStats();
@@ -631,15 +903,29 @@ function updateStats() {
   if (statsEventRate) statsEventRate.textContent = stats.tension.toFixed(2);
 
   // Update 3D holographic HUD
-  const totalThreats = eventCounts.urlhaus + eventCounts.ransomware + eventCounts.feodo +
-    eventCounts.phishing + eventCounts.hibp + eventCounts.spamhaus + eventCounts.bgp;
-  const connectionStatus = document.getElementById('connection-status')?.textContent || 'Unknown';
+  // Calculate threat level (1-5) based on tension
+  const threatLevel = Math.max(1, Math.min(5, Math.ceil(stats.tension * 5)));
+
+  // Events per minute
+  const eventsPerMin = eventTimestamps.length;
+
+  // Format breach records
+  let breachesDisplay: string;
+  if (totalBreachRecords >= 1000000000) {
+    breachesDisplay = `${(totalBreachRecords / 1000000000).toFixed(1)}B`;
+  } else if (totalBreachRecords >= 1000000) {
+    breachesDisplay = `${(totalBreachRecords / 1000000).toFixed(1)}M`;
+  } else if (totalBreachRecords >= 1000) {
+    breachesDisplay = `${(totalBreachRecords / 1000).toFixed(1)}K`;
+  } else {
+    breachesDisplay = totalBreachRecords.toString();
+  }
 
   visuals.updateHUDStats({
-    status: connectionStatus,
-    nodes: stats.nodes,
-    tension: stats.tension,
-    threats: totalThreats,
+    threatLevel,
+    ransomware: eventCounts.ransomware,
+    eventsPerMin,
+    breaches: breachesDisplay,
   });
 }
 

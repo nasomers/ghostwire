@@ -10,11 +10,27 @@ Ghostwire transforms live cybersecurity threat data into an immersive audiovisua
 
 ## Features
 
-- **Real-time threat visualization** — Watch attacks materialize as glowing nodes on a 3D particle field
-- **Generative audio** — Each threat type triggers unique synthesized sounds, creating an evolving dark ambient soundscape
-- **12 threat intelligence feeds** — Aggregates data from industry-leading sources
-- **Interactive exploration** — Click nodes to inspect threat details, hover to highlight related attacks
-- **Customizable experience** — Multiple color palettes, musical scales, and audio controls
+### Visual Engine
+- **Morphing particle formations** — 600 particles flow between 11 geometric shapes (sphere, torus, helix, tesseract, DNA helix, neural network, and more)
+- **4D Tesseract** — Rotating hypercube projection with glitch effects on critical events
+- **Icosahedron core** — Pulsing geometric centerpiece
+- **Energy conduits** — Axon-like connections between threat nodes with traveling data packets
+- **Post-processing** — Bloom, chromatic aberration, and mood-based color grading
+- **6 color themes** — Ghostwire, Cyberpunk, Matrix, Blood Moon, Arctic, Void
+
+### Audio Engine
+- **Generative music system** — Evolving dark ambient soundscape that never repeats
+- **Voice choir** — Three-voice formant-filtered pads for atmospheric depth
+- **Shard rain** — Crystalline texture layer reactive to threat activity
+- **Tension system** — Music intensity builds with attack volume, featuring dramatic drops and stingers
+- **10 musical scales** — Phrygian, Locrian, Harmonic Minor, Japanese, Blues, and more
+- **Key modulation** — Drifts through circle of fifths every few minutes
+
+### Real-time Data
+- **12 threat intelligence feeds** — Aggregated from industry-leading sources
+- **3D floating text** — Threat details materialize in space
+- **Scrolling ticker** — Continuous stream of live events
+- **Geographic visualization** — Attack origins labeled on wireframe globe
 
 ---
 
@@ -80,7 +96,7 @@ Ghostwire transforms live cybersecurity threat data into an immersive audiovisua
 
 ### Frontend
 - **Build Tool:** [Vite](https://vite.dev)
-- **3D Graphics:** [Three.js](https://threejs.org) with custom GLSL shaders
+- **3D Graphics:** [Three.js](https://threejs.org) with custom shaders and post-processing
 - **Audio:** [Tone.js](https://tonejs.github.io) — Web Audio synthesis
 - **Language:** TypeScript
 - **Deployment:** [Cloudflare Pages](https://pages.cloudflare.com)
@@ -91,7 +107,6 @@ Ghostwire transforms live cybersecurity threat data into an immersive audiovisua
 
 ### Prerequisites
 - [Bun](https://bun.sh) (v1.0+)
-- Node.js 18+ (for Vite)
 
 ### Backend Setup
 
@@ -148,28 +163,22 @@ cd frontend
 # Build
 bun run build
 
-# Deploy (requires CLOUDFLARE_API_TOKEN)
+# Deploy (requires CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID)
 wrangler pages deploy dist --project-name=ghostwire
 ```
 
 ---
 
-## Configuration
+## Controls
 
-### Audio Controls
+### Audio
 - **Volume** — Master output level
-- **Reverb** — Spatial depth and atmosphere
+- **Key** — Root note (C through B)
+- **Mode** — Musical scale (Phrygian, Minor, Dorian, etc.)
 
-### Musical Settings
-- **Root Note** — Base frequency (C through B)
-- **Scale** — Phrygian, Minor, Dorian, Locrian, Harmonic Minor
-
-### Visual Themes
-- **Ghostwire** — Default green/cyan palette
-- **Cyberpunk** — Neon pink and purple
-- **Noir** — Monochrome with subtle accents
-- **Blood Moon** — Deep reds and oranges
-- **Arctic** — Cool blues and whites
+### Visual
+- **Theme** — Color palette selection
+- **Mouse drag** — Rotate camera view
 
 ---
 
@@ -179,18 +188,18 @@ Each threat type has a unique sonic signature:
 
 | Threat | Sound |
 |--------|-------|
-| Malware URLs | Metallic FM synthesis with distortion |
-| Honeypot Attacks | Low drones with sub-bass |
-| Botnet C2 | Sharp percussion with delay |
-| Ransomware | Glitchy noise bursts |
+| Malware URLs | Metallic plucks with filter sweeps |
+| Honeypot Attacks | Low percussion with sub-bass |
+| Botnet C2 | Sharp FM synthesis with delay |
+| Ransomware | Glitchy bursts + voice choir swell + stinger |
 | Phishing | High spectral pads |
-| Bad Certs | Filtered sweeps |
+| Bad Certs | Filtered bell tones |
 | Brute Force | Rhythmic pulses |
-| Tor Nodes | Ethereal ambience |
-| Scanners | Granular textures |
-| Breaches | Impact hits |
-| IP Hijacks | Modulated bass |
-| BGP Events | Atmospheric rumbles |
+| Tor Nodes | Ethereal ghost ambience |
+| Scanners | Granular noise textures |
+| Breaches | Impact hits + voice choir swell |
+| IP Hijacks | Modulated bass growls |
+| BGP Events | Atmospheric rumbles + tension builders |
 
 ---
 
@@ -202,26 +211,15 @@ ghostwire/
 │   ├── src/
 │   │   ├── index.ts          # WebSocket server & event aggregation
 │   │   └── sources/          # Threat feed clients
-│   │       ├── urlhaus.ts
-│   │       ├── dshield.ts
-│   │       ├── feodo.ts
-│   │       ├── ransomwatch.ts
-│   │       ├── openphish.ts
-│   │       ├── sslbl.ts
-│   │       ├── blocklistde.ts
-│   │       ├── tor.ts
-│   │       ├── greynoise.ts
-│   │       ├── hibp.ts
-│   │       ├── spamhaus.ts
-│   │       └── bgpstream.ts
 │   ├── Dockerfile
 │   └── fly.toml
 │
 ├── frontend/
 │   ├── src/
-│   │   ├── main.ts           # Application entry point
-│   │   ├── audio.ts          # Tone.js audio engine
-│   │   ├── visuals.ts        # Three.js rendering
+│   │   ├── main.ts           # Entry point, event routing
+│   │   ├── socket.ts         # WebSocket client
+│   │   ├── audio.ts          # Tone.js generative audio (~2700 lines)
+│   │   ├── visuals.ts        # Three.js rendering (~3700 lines)
 │   │   └── style.css         # UI styling
 │   ├── index.html
 │   └── vite.config.ts
