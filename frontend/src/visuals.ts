@@ -2885,7 +2885,6 @@ export class VisualEngine {
   // Spawn a 3D data fragment (internal, smaller)
   private spawnDataFragment(text: string, position: THREE.Vector3, color: THREE.Color, sourcePos?: THREE.Vector3) {
     if (this.dataFragments.length >= this.maxFragments) return;
-    if (this.isMobileDevice) return; // Skip on mobile for performance
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d')!;
@@ -3397,19 +3396,19 @@ export class VisualEngine {
       if (i === 0) {
         spawnPos = p.currentPos.clone();
 
-        if (!this.isMobileDevice) {
-          this.addFloatingLabel(
-            p.currentPos,
-            label || THREAT_LABELS[threatType] || threatType.toUpperCase(),
-            color
-          );
-        }
+        this.addFloatingLabel(
+          p.currentPos,
+          label || THREAT_LABELS[threatType] || threatType.toUpperCase(),
+          color
+        );
       }
     }
 
-    // Spawn data packets traveling between affected nodes
-    if (affectedIndices.length > 0 && !this.isMobileDevice) {
-      const packetCount = Math.min(3, Math.ceil(burstSize / 2));
+    // Spawn data packets traveling between affected nodes (reduced on mobile)
+    if (affectedIndices.length > 0) {
+      const packetCount = this.isMobileDevice
+        ? Math.min(1, Math.ceil(burstSize / 3))
+        : Math.min(3, Math.ceil(burstSize / 2));
       for (let i = 0; i < packetCount; i++) {
         const startIdx = affectedIndices[Math.floor(Math.random() * affectedIndices.length)];
         this.spawnPacket(startIdx, color);
@@ -3462,12 +3461,12 @@ export class VisualEngine {
 
   // Public: Spawn a geographic country label near an event
   spawnGeoLabel(worldPos: THREE.Vector3, country: string, severity: 'critical' | 'high' | 'medium' | 'low' = 'medium') {
-    if (this.isMobileDevice) return;
     if (!country || country.length < 2) return;
 
-    // Limit concurrent geo labels
+    // Limit concurrent geo labels (reduced on mobile)
+    const maxGeoLabels = this.isMobileDevice ? 4 : 8;
     const geoLabelCount = this.floatingLabels.filter(l => l.element.classList.contains('geo-label')).length;
-    if (geoLabelCount >= 8) return;
+    if (geoLabelCount >= maxGeoLabels) return;
 
     // Severity colors
     const severityColors: Record<string, string> = {

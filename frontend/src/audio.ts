@@ -480,216 +480,213 @@ export class AudioEngine {
     });
     this.pluckSynth.connect(this.delay);
 
-    // === TEXTURAL ===
+    // === TEXTURAL (Desktop only) ===
+    if (!this.isMobileDevice) {
+      this.droneSynth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'sine' },
+        envelope: { attack: 4, decay: 3, sustain: 0.5, release: 6 },
+        volume: -22,
+      });
+      this.droneSynth.maxPolyphony = maxPolyLow;
+      this.droneSynth.connect(this.reverb);
 
-    this.droneSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine' },
-      envelope: { attack: 4, decay: 3, sustain: 0.5, release: 6 },
-      volume: -22,
-    });
-    this.droneSynth.maxPolyphony = maxPolyLow;
-    this.droneSynth.connect(this.reverb);
+      // Enhanced noise floor with filter and LFO modulation
+      this.noiseGain = new Tone.Gain(0.025);
+      this.noiseGain.connect(this.reverb);
 
-    // Enhanced noise floor with filter and LFO modulation
-    this.noiseGain = new Tone.Gain(0.025);
-    this.noiseGain.connect(this.reverb);
+      // Lowpass filter - opens with tension
+      const noiseFilter = new Tone.Filter({
+        type: 'lowpass',
+        frequency: 600,
+        Q: 0.7,
+      });
+      noiseFilter.connect(this.noiseGain);
 
-    // Lowpass filter - opens with tension
-    const noiseFilter = new Tone.Filter({
-      type: 'lowpass',
-      frequency: 600,
-      Q: 0.7,
-    });
-    noiseFilter.connect(this.noiseGain);
+      // Slow LFO for breathing movement on filter
+      const noiseLFO = new Tone.LFO({
+        frequency: 0.04,
+        min: 400,
+        max: 1000,
+      });
+      noiseLFO.connect(noiseFilter.frequency);
+      noiseLFO.start();
 
-    // Slow LFO for breathing movement on filter
-    const noiseLFO = new Tone.LFO({
-      frequency: 0.04,
-      min: 400,
-      max: 1000,
-    });
-    noiseLFO.connect(noiseFilter.frequency);
-    noiseLFO.start();
+      // Pink noise for softer texture
+      this.noiseSynth = new Tone.Noise('pink');
+      this.noiseSynth.connect(noiseFilter);
+      this.noiseSynth.start();
 
-    // Pink noise for softer texture
-    this.noiseSynth = new Tone.Noise('pink');
-    this.noiseSynth.connect(noiseFilter);
-    this.noiseSynth.start();
+      // Store for tension control
+      (this as any).noiseFilter = noiseFilter;
+      (this as any).noiseLFO = noiseLFO;
 
-    // Store for tension control
-    (this as any).noiseFilter = noiseFilter;
-    (this as any).noiseLFO = noiseLFO;
+      // Quiet Breath - soft breathing pad with LFO modulation
+      this.breathGain = new Tone.Gain(0);
+      this.breathGain.connect(this.reverb);
 
-    // === NEW ATMOSPHERIC SYNTHS ===
+      this.breathSynth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'sine4' },
+        envelope: { attack: 3, decay: 2, sustain: 0.4, release: 4 },
+        volume: -12,
+      });
+      this.breathSynth.maxPolyphony = 4;
+      this.breathSynth.connect(this.breathGain);
 
-    // Quiet Breath - soft breathing pad with LFO modulation
-    this.breathGain = new Tone.Gain(0);
-    this.breathGain.connect(this.reverb);
+      this.breathLFO = new Tone.LFO({
+        frequency: 0.08, // Very slow breathing
+        min: 0,
+        max: 0.85,
+      });
+      this.breathLFO.connect(this.breathGain.gain);
+      this.breathLFO.start();
 
-    this.breathSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine4' },
-      envelope: { attack: 3, decay: 2, sustain: 0.4, release: 4 },
-      volume: -12,
-    });
-    this.breathSynth.maxPolyphony = 4;
-    this.breathSynth.connect(this.breathGain);
+      // Growl Bass - aggressive filtered bass for critical events
+      this.growlDistortion = new Tone.Distortion({
+        distortion: 0.4,
+        wet: 0.3,
+      });
+      this.growlDistortion.connect(this.masterComp);
 
-    this.breathLFO = new Tone.LFO({
-      frequency: 0.08, // Very slow breathing
-      min: 0,
-      max: 0.85,
-    });
-    this.breathLFO.connect(this.breathGain.gain);
-    this.breathLFO.start();
+      this.growlFilter = new Tone.Filter({
+        frequency: 200,
+        type: 'lowpass',
+        rolloff: -24,
+        Q: 4,
+      });
+      this.growlFilter.connect(this.growlDistortion);
 
-    // Growl Bass - aggressive filtered bass for critical events
-    this.growlDistortion = new Tone.Distortion({
-      distortion: 0.4,
-      wet: 0.3,
-    });
-    this.growlDistortion.connect(this.masterComp);
+      this.growlSynth = new Tone.MonoSynth({
+        oscillator: { type: 'sawtooth' },
+        envelope: { attack: 0.01, decay: 0.4, sustain: 0.3, release: 0.8 },
+        filterEnvelope: {
+          attack: 0.01,
+          decay: 0.3,
+          sustain: 0.2,
+          release: 0.5,
+          baseFrequency: 60,
+          octaves: 3,
+        },
+        volume: -6,
+      });
+      this.growlSynth.connect(this.growlFilter);
 
-    this.growlFilter = new Tone.Filter({
-      frequency: 200,
-      type: 'lowpass',
-      rolloff: -24,
-      Q: 4,
-    });
-    this.growlFilter.connect(this.growlDistortion);
+      // Reverse Swell - anticipation pad with very long attack
+      this.swellReverb = new Tone.Reverb({
+        decay: 6,
+        wet: 0.8,
+        preDelay: 0.2,
+      });
+      await this.swellReverb.ready;
+      this.swellReverb.connect(this.masterComp);
 
-    this.growlSynth = new Tone.MonoSynth({
-      oscillator: { type: 'sawtooth' },
-      envelope: { attack: 0.01, decay: 0.4, sustain: 0.3, release: 0.8 },
-      filterEnvelope: {
-        attack: 0.01,
-        decay: 0.3,
-        sustain: 0.2,
-        release: 0.5,
-        baseFrequency: 60,
-        octaves: 3,
-      },
-      volume: -6,
-    });
-    this.growlSynth.connect(this.growlFilter);
+      this.swellSynth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'sine' },
+        envelope: { attack: 2.5, decay: 1, sustain: 0.8, release: 3 },
+        volume: -10,
+      });
+      this.swellSynth.maxPolyphony = 6;
+      this.swellSynth.connect(this.swellReverb);
 
-    // Reverse Swell - anticipation pad with very long attack
-    this.swellReverb = new Tone.Reverb({
-      decay: 6,
-      wet: 0.8,
-      preDelay: 0.2,
-    });
-    await this.swellReverb.ready;
-    this.swellReverb.connect(this.masterComp);
+      // Harmonic Ghost - ethereal delayed echoes
+      this.ghostDelay = new Tone.PingPongDelay({
+        delayTime: '4n.',
+        feedback: 0.5,
+        wet: 0.8,
+      });
+      this.ghostDelay.connect(this.reverb);
 
-    this.swellSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine' },
-      envelope: { attack: 2.5, decay: 1, sustain: 0.8, release: 3 },
-      volume: -10,
-    });
-    this.swellSynth.maxPolyphony = 6;
-    this.swellSynth.connect(this.swellReverb);
+      this.ghostSynth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'sine' },
+        envelope: { attack: 0.5, decay: 1.5, sustain: 0.2, release: 2 },
+        volume: -18,
+      });
+      this.ghostSynth.maxPolyphony = 8;
+      this.ghostSynth.connect(this.ghostDelay);
 
-    // Harmonic Ghost - ethereal delayed echoes
-    this.ghostDelay = new Tone.PingPongDelay({
-      delayTime: '4n.',
-      feedback: 0.5,
-      wet: 0.8,
-    });
-    this.ghostDelay.connect(this.reverb);
+      // Sub-bass - deep rumbling drops you feel in your chest
+      this.subBassFilter = new Tone.Filter({
+        frequency: 80,
+        type: 'lowpass',
+        rolloff: -24,
+      });
+      this.subBassFilter.connect(this.masterComp);
 
-    this.ghostSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.5, decay: 1.5, sustain: 0.2, release: 2 },
-      volume: -18,
-    });
-    this.ghostSynth.maxPolyphony = 8;
-    this.ghostSynth.connect(this.ghostDelay);
+      this.subBassSynth = new Tone.MonoSynth({
+        oscillator: { type: 'sine' },
+        envelope: { attack: 0.01, decay: 0.8, sustain: 0.3, release: 1.5 },
+        filterEnvelope: {
+          attack: 0.01,
+          decay: 0.5,
+          sustain: 0.2,
+          release: 1,
+          baseFrequency: 30,
+          octaves: 1,
+        },
+        volume: 0, // Loud!
+      });
+      this.subBassSynth.connect(this.subBassFilter);
 
-    // === DRAMATIC IMPACT SYNTHS ===
+      // Riser - pitch sweep building tension
+      this.riserFilter = new Tone.Filter({
+        frequency: 500,
+        type: 'bandpass',
+        Q: 2,
+      });
+      this.riserFilter.connect(this.reverb);
 
-    // Sub-bass - deep rumbling drops you feel in your chest
-    this.subBassFilter = new Tone.Filter({
-      frequency: 80,
-      type: 'lowpass',
-      rolloff: -24,
-    });
-    this.subBassFilter.connect(this.masterComp);
+      this.riserSynth = new Tone.MonoSynth({
+        oscillator: { type: 'sawtooth' },
+        envelope: { attack: 2, decay: 0.5, sustain: 0.8, release: 0.5 },
+        filterEnvelope: {
+          attack: 2,
+          decay: 0.3,
+          sustain: 0.5,
+          release: 0.5,
+          baseFrequency: 200,
+          octaves: 4,
+        },
+        volume: -8,
+      });
+      this.riserSynth.connect(this.riserFilter);
 
-    this.subBassSynth = new Tone.MonoSynth({
-      oscillator: { type: 'sine' },
-      envelope: { attack: 0.01, decay: 0.8, sustain: 0.3, release: 1.5 },
-      filterEnvelope: {
-        attack: 0.01,
-        decay: 0.5,
-        sustain: 0.2,
-        release: 1,
-        baseFrequency: 30,
-        octaves: 1,
-      },
-      volume: 0, // Loud!
-    });
-    this.subBassSynth.connect(this.subBassFilter);
+      // Impact noise burst - percussive hit
+      this.impactGain = new Tone.Gain(0.8);
+      this.impactGain.connect(this.masterComp);
 
-    // Riser - pitch sweep building tension
-    this.riserFilter = new Tone.Filter({
-      frequency: 500,
-      type: 'bandpass',
-      Q: 2,
-    });
-    this.riserFilter.connect(this.reverb);
+      this.impactNoise = new Tone.NoiseSynth({
+        noise: { type: 'white' },
+        envelope: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.1 },
+        volume: -6,
+      });
+      this.impactNoise.connect(this.impactGain);
 
-    this.riserSynth = new Tone.MonoSynth({
-      oscillator: { type: 'sawtooth' },
-      envelope: { attack: 2, decay: 0.5, sustain: 0.8, release: 0.5 },
-      filterEnvelope: {
-        attack: 2,
-        decay: 0.3,
-        sustain: 0.5,
-        release: 0.5,
-        baseFrequency: 200,
-        octaves: 4,
-      },
-      volume: -8,
-    });
-    this.riserSynth.connect(this.riserFilter);
+      // Tension drone - continuous low frequency that builds
+      this.tensionDroneGain = new Tone.Gain(0);
+      this.tensionDroneGain.connect(this.masterComp);
 
-    // Impact noise burst - percussive hit
-    this.impactGain = new Tone.Gain(0.8);
-    this.impactGain.connect(this.masterComp);
+      this.tensionDrone = new Tone.MonoSynth({
+        oscillator: { type: 'sawtooth' },
+        envelope: { attack: 2, decay: 1, sustain: 1, release: 3 },
+        filterEnvelope: {
+          attack: 0.5,
+          decay: 0.5,
+          sustain: 0.5,
+          release: 2,
+          baseFrequency: 40,
+          octaves: 1,
+        },
+        volume: -10,
+      });
+      this.tensionDrone.connect(this.tensionDroneGain);
 
-    this.impactNoise = new Tone.NoiseSynth({
-      noise: { type: 'white' },
-      envelope: { attack: 0.001, decay: 0.15, sustain: 0, release: 0.1 },
-      volume: -6,
-    });
-    this.impactNoise.connect(this.impactGain);
-
-    // Tension drone - continuous low frequency that builds
-    this.tensionDroneGain = new Tone.Gain(0);
-    this.tensionDroneGain.connect(this.masterComp);
-
-    this.tensionDrone = new Tone.MonoSynth({
-      oscillator: { type: 'sawtooth' },
-      envelope: { attack: 2, decay: 1, sustain: 1, release: 3 },
-      filterEnvelope: {
-        attack: 0.5,
-        decay: 0.5,
-        sustain: 0.5,
-        release: 2,
-        baseFrequency: 40,
-        octaves: 1,
-      },
-      volume: -10,
-    });
-    this.tensionDrone.connect(this.tensionDroneGain);
-
-    this.tensionDroneLFO = new Tone.LFO({
-      frequency: 0.1,
-      min: 0,
-      max: 0.7,
-    });
-    this.tensionDroneLFO.connect(this.tensionDroneGain.gain);
-    this.tensionDroneLFO.start();
+      this.tensionDroneLFO = new Tone.LFO({
+        frequency: 0.1,
+        min: 0,
+        max: 0.7,
+      });
+      this.tensionDroneLFO.connect(this.tensionDroneGain.gain);
+      this.tensionDroneLFO.start();
+    }
 
     // === DESKTOP-ONLY HEAVY LAYERS ===
     // These are skipped on mobile for performance
@@ -1041,8 +1038,8 @@ export class AudioEngine {
       const bassNote = this.getNote(chord[0], 1);
       this.bassSynth.triggerAttackRelease(bassNote, '2n', Tone.now());
 
-      // Drone on root occasionally
-      if (Math.random() < 0.3) {
+      // Drone on root occasionally (desktop only)
+      if (!this.isMobileDevice && this.droneSynth && Math.random() < 0.3) {
         const droneNote = this.getNote(0, 1);
         this.droneSynth.triggerAttackRelease([droneNote], '4n', Tone.now() + 0.5);
       }
@@ -1332,7 +1329,9 @@ export class AudioEngine {
     this.filter.frequency.rampTo(1200 + this.tension * 2000, 0.5);
     this.delay.feedback.rampTo(0.15 + this.tension * 0.2, 0.5);
     this.reverb.wet.rampTo(0.2 + this.tension * 0.3, 0.5);
-    this.noiseGain.gain.rampTo(0.01 + this.tension * 0.04, 0.5);
+    if (!this.isMobileDevice && this.noiseGain) {
+      this.noiseGain.gain.rampTo(0.01 + this.tension * 0.04, 0.5);
+    }
 
   }
 
@@ -1507,8 +1506,8 @@ export class AudioEngine {
     this.addActivity(0.03);
     this.playTexturedPhrase('low', 4);
 
-    // Drone layer
-    if (Math.random() < 0.3) {
+    // Drone layer (desktop only)
+    if (!this.isMobileDevice && this.droneSynth && Math.random() < 0.3) {
       this.droneSynth.triggerAttackRelease([this.getNote(0, 2)], '4n', Tone.now() + 0.5);
     }
   }
@@ -1520,8 +1519,10 @@ export class AudioEngine {
     const scanLevel = Math.min((data.scannerCount || 50) / 200, 1);
     this.activity = this.activity * 0.9 + scanLevel * 0.1;
 
-    // Noise floor volume - increases with evolution
-    this.noiseGain.gain.rampTo(0.01 + scanLevel * 0.03 + this.evolutionPhase * 0.003, 1);
+    // Noise floor volume - increases with evolution (desktop only)
+    if (!this.isMobileDevice && this.noiseGain) {
+      this.noiseGain.gain.rampTo(0.01 + scanLevel * 0.03 + this.evolutionPhase * 0.003, 1);
+    }
   }
 
   playBreach(breach: HIBPBreach) {
@@ -2121,7 +2122,7 @@ export class AudioEngine {
   }
 
   private playGrowlBass() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
 
     // 12 second cooldown between growls
     const nowMs = Date.now();
@@ -2182,7 +2183,7 @@ export class AudioEngine {
   }
 
   private playReverseSwell() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
 
     const now = Date.now();
     if (now - this.lastSwellTime < 8000) return; // 8 second cooldown
@@ -2253,7 +2254,7 @@ export class AudioEngine {
 
   // Deep sub-bass drop - you feel this in your chest
   playSubBassDrop() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
     console.log('[Audio] Sub-bass drop');
 
     try {
@@ -2270,7 +2271,7 @@ export class AudioEngine {
 
   // Riser - tension building sweep
   playRiser(duration: number = 2) {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
     console.log('[Audio] Riser triggered');
 
     try {
@@ -2296,7 +2297,7 @@ export class AudioEngine {
 
   // Impact hit - percussive noise burst with sub-bass
   playImpactHit() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
     console.log('[Audio] Impact hit');
 
     try {
@@ -2314,7 +2315,7 @@ export class AudioEngine {
 
   // Full dramatic sequence - riser into impact
   playDramaticHit() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
     console.log('[Audio] Dramatic hit sequence');
 
     // Start with riser
@@ -2571,7 +2572,7 @@ export class AudioEngine {
 
   // Deep throb - sub-bass pulse
   private playDeepThrob() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
     console.log('[Audio] Deep throb');
 
     try {
@@ -2609,7 +2610,7 @@ export class AudioEngine {
 
   // Update tension drone intensity based on current tension
   private updateTensionDrone() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
 
     // Drone kicks in at lower tension now (was 0.4, now 0.15)
     const targetGain = this.tension > 0.15 ? (this.tension - 0.1) * 0.8 : 0;
@@ -2669,45 +2670,48 @@ export class AudioEngine {
   dispose() {
     if (!this.initialized) return;
 
-    this.noiseSynth.stop();
-    this.breathLFO.stop();
-    this.tensionDroneLFO.stop();
-
+    // Core synths (always initialized)
     this.leadSynth.dispose();
     this.padSynth.dispose();
     this.bassSynth.dispose();
     this.arpSynth.dispose();
     this.bellSynth.dispose();
     this.pluckSynth.dispose();
-    this.droneSynth.dispose();
-    this.noiseSynth.dispose();
-    this.noiseGain.dispose();
-
-    // Dispose atmospheric synths
-    this.breathSynth.dispose();
-    this.breathLFO.dispose();
-    this.breathGain.dispose();
-    this.growlSynth.dispose();
-    this.growlFilter.dispose();
-    this.growlDistortion.dispose();
-    this.swellSynth.dispose();
-    this.swellReverb.dispose();
-    this.ghostSynth.dispose();
-    this.ghostDelay.dispose();
-
-    // Dispose dramatic impact synths
-    this.subBassSynth.dispose();
-    this.subBassFilter.dispose();
-    this.riserSynth.dispose();
-    this.riserFilter.dispose();
-    this.impactNoise.dispose();
-    this.impactGain.dispose();
-    this.tensionDrone.dispose();
-    this.tensionDroneGain.dispose();
-    this.tensionDroneLFO.dispose();
 
     // Dispose desktop-only layers (not initialized on mobile)
     if (!this.isMobileDevice) {
+      // Textural synths
+      this.noiseSynth.stop();
+      this.breathLFO.stop();
+      this.tensionDroneLFO.stop();
+
+      this.droneSynth.dispose();
+      this.noiseSynth.dispose();
+      this.noiseGain.dispose();
+
+      // Atmospheric synths
+      this.breathSynth.dispose();
+      this.breathLFO.dispose();
+      this.breathGain.dispose();
+      this.growlSynth.dispose();
+      this.growlFilter.dispose();
+      this.growlDistortion.dispose();
+      this.swellSynth.dispose();
+      this.swellReverb.dispose();
+      this.ghostSynth.dispose();
+      this.ghostDelay.dispose();
+
+      // Dramatic impact synths
+      this.subBassSynth.dispose();
+      this.subBassFilter.dispose();
+      this.riserSynth.dispose();
+      this.riserFilter.dispose();
+      this.impactNoise.dispose();
+      this.impactGain.dispose();
+      this.tensionDrone.dispose();
+      this.tensionDroneGain.dispose();
+      this.tensionDroneLFO.dispose();
+
       // Dispose evolving bass
       this.evolvingBassLFO.stop();
       this.evolvingBass.dispose();

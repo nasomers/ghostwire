@@ -1101,13 +1101,13 @@ function setupDeviceNote() {
   if (isMobile()) {
     deviceNote.className = 'device-note mobile';
     deviceNote.innerHTML = `
-      <strong>Mobile mode:</strong> Some audio layers are simplified for performance.
-      For the full experience with rich ambient textures and voice choirs, visit on desktop.
+      You're viewing in <strong>mobile mode</strong> — a streamlined experience optimized for your device.
+      For the full audiovisual journey, we recommend visiting on desktop.
     `;
   } else {
     deviceNote.className = 'device-note desktop';
     deviceNote.innerHTML = `
-      <strong>Desktop mode:</strong> Full audio and visual experience enabled.
+      <strong>Desktop mode</strong> — full experience enabled
     `;
   }
 }
