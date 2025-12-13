@@ -1,106 +1,119 @@
+# Ghostwire Backend
 
-Default to using Bun instead of Node.js.
+WebSocket server that aggregates threat intelligence feeds and streams events to the frontend visualization.
 
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
+## Architecture
 
-## APIs
-
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
-
-## Testing
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
+```
+index.ts                 - Entry point (re-exports src/index)
+src/
+├── index.ts             - Main server, WebSocket handling, event broadcasting
+└── sources/             - Threat feed clients
+    ├── urlhaus.ts       - Malware URL database (abuse.ch)
+    ├── greynoise.ts     - Internet scanner statistics
+    ├── dshield.ts       - SANS honeypot attack data
+    ├── feodo.ts         - Botnet C2 tracker (abuse.ch)
+    ├── ransomwatch.ts   - Ransomware victim announcements
+    ├── openphish.ts     - Phishing URL feed
+    ├── sslbl.ts         - Malicious SSL certificates (abuse.ch)
+    ├── blocklistde.ts   - Bruteforce attack IPs
+    ├── tor.ts           - Tor exit node list
+    ├── hibp.ts          - Have I Been Pwned breaches
+    ├── spamhaus.ts      - Hijacked IP ranges (DROP list)
+    ├── bgpstream.ts     - BGP route hijacks/leaks (RIPE RIS)
+    ├── ris-live.ts      - Real-time BGP stream
+    ├── abuseipdb.ts     - (unused) IP reputation
+    ├── threatfox.ts     - (unused) IOC database
+    └── malwarebazaar.ts - (unused) Malware samples
 ```
 
-## Frontend
+## Server
 
-Use HTML imports with `Bun.serve()`. Don't use `vite`. HTML imports fully support React, CSS, Tailwind.
+- **Runtime**: Bun with native WebSocket support via `Bun.serve()`
+- **Port**: 3333
+- **Endpoints**:
+  - `GET /` - Health check
+  - `GET /ws` - WebSocket upgrade
 
-Server:
+## Event Flow
 
-```ts#index.ts
-import index from "./index.html"
+1. Source clients poll/stream external APIs on intervals
+2. New events are queued with rate limiting (drip feed for dramatic effect)
+3. `broadcast()` sends JSON to all connected WebSocket clients
+4. Frontend receives typed `GhostwireEvent` objects
 
-Bun.serve({
-  routes: {
-    "/": index,
-    "/api/users/:id": {
-      GET: (req) => {
-        return new Response(JSON.stringify({ id: req.params.id }));
-      },
-    },
-  },
-  // optional websocket support
-  websocket: {
-    open: (ws) => {
-      ws.send("Hello, world!");
-    },
-    message: (ws, message) => {
-      ws.send(message);
-    },
-    close: (ws) => {
-      // handle close
-    }
-  },
-  development: {
-    hmr: true,
-    console: true,
-  }
-})
+## Rate Limiting
+
+Events are throttled to create better audiovisual pacing:
+- URLhaus: 500ms between malware hits
+- DShield: 800ms between honeypot attacks
+- Feodo: 1000ms between C2 detections
+- Bruteforce: 300ms between attacks
+- Phishing: 600ms between URLs
+- Other feeds: Real-time or batch intervals
+
+## Development
+
+```bash
+# Install dependencies
+~/.bun/bin/bun install
+
+# Run development server
+~/.bun/bin/bun run index.ts
+
+# Run with hot reload
+~/.bun/bin/bun --hot run index.ts
 ```
 
-HTML files can import .tsx, .jsx or .js files directly and Bun's bundler will transpile & bundle automatically. `<link>` tags can point to stylesheets and Bun's CSS bundler will bundle.
+## Deployment
 
-```html#index.html
-<html>
-  <body>
-    <h1>Hello, world!</h1>
-    <script type="module" src="./frontend.tsx"></script>
-  </body>
-</html>
+Deployed to Fly.io at `ghostwire-api.ghostlaboratory.net`
+
+```bash
+# Deploy
+~/.fly/bin/fly deploy
+
+# View logs
+~/.fly/bin/fly logs
+
+# Check status
+~/.fly/bin/fly status
 ```
 
-With the following `frontend.tsx`:
+Configuration in `fly.toml`:
+- Region: ord (Chicago)
+- Memory: 512MB
+- Auto-stop when idle, auto-start on request
 
-```tsx#frontend.tsx
-import React from "react";
-import { createRoot } from "react-dom/client";
+## Adding a New Source
 
-// import .css files directly and it works
-import './index.css';
+1. Create `src/sources/newsource.ts`:
+   - Define data interface
+   - Create client class with polling/streaming logic
+   - Export type and client
 
-const root = createRoot(document.body);
+2. Update `src/index.ts`:
+   - Import client and type
+   - Add to `GhostwireEventType` union
+   - Add to `GhostwireEvent.data` union
+   - Initialize client and wire up event handler
+   - Add throttling if needed
 
-export default function Frontend() {
-  return <h1>Hello, world!</h1>;
-}
+3. Update frontend to handle new event type
 
-root.render(<Frontend />);
-```
+## External APIs Used
 
-Then, run index.ts
-
-```sh
-bun --hot ./index.ts
-```
-
-For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
+| Source | API | Auth |
+|--------|-----|------|
+| URLhaus | abuse.ch API | None |
+| GreyNoise | Community API | API key |
+| DShield | SANS ISC API | None |
+| Feodo | abuse.ch API | None |
+| RansomWatch | GitHub raw | None |
+| OpenPhish | Feed URL | None |
+| SSLBL | abuse.ch API | None |
+| Blocklist.de | Feed URL | None |
+| Tor | Onionoo API | None |
+| HIBP | API v3 | API key |
+| Spamhaus | DROP list | None |
+| BGPStream | RIPE RIS Live | None |
