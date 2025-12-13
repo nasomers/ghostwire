@@ -501,6 +501,7 @@ export class AudioEngine {
   }
 
   private lastGlitchTime = 0;
+  private lastBreachTime = 0;
 
   private triggerGlitch(intensity: number = 0.5) {
     if (!this.initialized) return;
@@ -861,8 +862,14 @@ export class AudioEngine {
   // === HIBP - Data Breach ===
   playBreach(breach: HIBPBreach) {
     if (!this.initialized) return;
+
+    // Rate limit - each breach uses 4 spectralSynth notes, throttle to prevent polyphony overflow
+    const currentTime = Tone.now();
+    if (currentTime - this.lastBreachTime < 0.15) return;
+    this.lastBreachTime = currentTime;
+
     try {
-      const now = Tone.now();
+      const now = currentTime + 0.02;
       const params = hashToParams(breach.name);
 
       // Breaches are catastrophic - high tension
