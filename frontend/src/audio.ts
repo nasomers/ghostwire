@@ -357,9 +357,7 @@ export class AudioEngine {
 
     this.isMobileDevice = isMobile();
 
-    // Mobile: use larger buffer for stability
     if (this.isMobileDevice) {
-      Tone.setContext(new Tone.Context({ latencyHint: 'playback' }));
       console.log('[Audio] Mobile mode - reduced features for stability');
     }
 
