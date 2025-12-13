@@ -366,8 +366,8 @@ export class AudioEngine {
 
     Tone.getTransport().bpm.value = this.bpm;
 
-    // Polyphony limits - much lower on mobile
-    const maxPoly = this.isMobileDevice ? 4 : 12;
+    // Polyphony limits - minimal on mobile
+    const maxPoly = this.isMobileDevice ? 3 : 12;
     const maxPolyLow = this.isMobileDevice ? 2 : 8;
 
     // === MASTER CHAIN ===
@@ -459,7 +459,7 @@ export class AudioEngine {
       envelope: { attack: 0.01, decay: 0.15, sustain: 0.1, release: 0.3 },
       volume: -14,
     });
-    this.arpSynth.maxPolyphony = this.isMobileDevice ? 6 : 24;
+    this.arpSynth.maxPolyphony = this.isMobileDevice ? 4 : 24;
     this.arpSynth.connect(this.delay);
 
     // Bell - glassy

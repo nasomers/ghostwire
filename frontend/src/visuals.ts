@@ -691,7 +691,6 @@ export class VisualEngine {
   // Labels
   private labelContainer: HTMLDivElement;
   private floatingLabels: FloatingLabel[] = [];
-  private formationLabel: HTMLDivElement;
 
   // 3D Data fragments (floating text in space)
   private dataFragments: DataFragment[] = [];
@@ -836,106 +835,6 @@ export class VisualEngine {
     this.labelContainer.id = 'threat-labels';
     this.labelContainer.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:100;overflow:hidden;';
     document.body.appendChild(this.labelContainer);
-
-    // Glitch GHOSTWIRE title
-    this.formationLabel = document.createElement('div');
-    this.formationLabel.id = 'ghostwire-glitch';
-    this.formationLabel.innerHTML = `
-      <span class="glitch-text" data-text="GHOSTWIRE">GHOSTWIRE</span>
-    `;
-    this.formationLabel.style.cssText = `
-      position: fixed;
-      bottom: 70px;
-      left: 50%;
-      transform: translateX(-50%);
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 14px;
-      font-weight: 500;
-      letter-spacing: 8px;
-      color: rgba(0, 255, 200, 0.7);
-      pointer-events: none;
-      z-index: 101;
-      text-shadow: 0 0 10px rgba(0, 255, 200, 0.5);
-    `;
-
-    // Add glitch CSS animation
-    const glitchStyle = document.createElement('style');
-    glitchStyle.textContent = `
-      #ghostwire-glitch .glitch-text {
-        position: relative;
-        display: inline-block;
-        animation: glitch-skew 4s infinite linear alternate-reverse;
-      }
-      #ghostwire-glitch .glitch-text::before,
-      #ghostwire-glitch .glitch-text::after {
-        content: attr(data-text);
-        position: absolute;
-        top: 0;
-        left: 0;
-        width: 100%;
-        height: 100%;
-        opacity: 0.8;
-      }
-      #ghostwire-glitch .glitch-text::before {
-        animation: glitch-1 3s infinite linear alternate-reverse;
-        clip-path: polygon(0 0, 100% 0, 100% 35%, 0 35%);
-        color: rgba(255, 0, 100, 0.7);
-        text-shadow: -2px 0 rgba(255, 0, 100, 0.5);
-      }
-      #ghostwire-glitch .glitch-text::after {
-        animation: glitch-2 2s infinite linear alternate-reverse;
-        clip-path: polygon(0 65%, 100% 65%, 100% 100%, 0 100%);
-        color: rgba(0, 200, 255, 0.7);
-        text-shadow: 2px 0 rgba(0, 200, 255, 0.5);
-      }
-      @keyframes glitch-1 {
-        0%, 92% { transform: translate(0); opacity: 0.8; }
-        92.5% { transform: translate(-3px, 1px); opacity: 1; }
-        93% { transform: translate(2px, -1px); opacity: 0.9; }
-        93.5% { transform: translate(-1px, 2px); opacity: 1; }
-        94% { transform: translate(0); opacity: 0.8; }
-        96%, 100% { transform: translate(0); opacity: 0.8; }
-      }
-      @keyframes glitch-2 {
-        0%, 94% { transform: translate(0); opacity: 0.8; }
-        94.5% { transform: translate(2px, -1px); opacity: 1; }
-        95% { transform: translate(-3px, 1px); opacity: 0.9; }
-        95.5% { transform: translate(1px, -2px); opacity: 1; }
-        96% { transform: translate(0); opacity: 0.8; }
-        98%, 100% { transform: translate(0); opacity: 0.8; }
-      }
-      @keyframes glitch-skew {
-        0%, 96% { transform: skew(0deg); }
-        97% { transform: skew(2deg); }
-        98% { transform: skew(-1deg); }
-        99% { transform: skew(1deg); }
-        100% { transform: skew(0deg); }
-      }
-      #ghostwire-glitch.high-tension .glitch-text::before {
-        animation: glitch-1-intense 0.5s infinite linear alternate-reverse;
-      }
-      #ghostwire-glitch.high-tension .glitch-text::after {
-        animation: glitch-2-intense 0.3s infinite linear alternate-reverse;
-      }
-      @keyframes glitch-1-intense {
-        0%, 70% { transform: translate(0); opacity: 0.8; }
-        75% { transform: translate(-4px, 2px); opacity: 1; }
-        80% { transform: translate(3px, -2px); opacity: 0.9; }
-        85% { transform: translate(-2px, 3px); opacity: 1; }
-        90% { transform: translate(0); opacity: 0.8; }
-        100% { transform: translate(0); opacity: 0.8; }
-      }
-      @keyframes glitch-2-intense {
-        0%, 60% { transform: translate(0); opacity: 0.8; }
-        65% { transform: translate(3px, -2px); opacity: 1; }
-        70% { transform: translate(-4px, 2px); opacity: 0.9; }
-        75% { transform: translate(2px, -3px); opacity: 1; }
-        80% { transform: translate(0); opacity: 0.8; }
-        100% { transform: translate(0); opacity: 0.8; }
-      }
-    `;
-    document.head.appendChild(glitchStyle);
-    document.body.appendChild(this.formationLabel);
 
     // Scene
     this.scene = new THREE.Scene();
@@ -2442,12 +2341,6 @@ export class VisualEngine {
   }
 
   private updateGlitchIntensity() {
-    // Toggle high-tension class based on current tension
-    if (this.tension > 0.6) {
-      this.formationLabel.classList.add('high-tension');
-    } else {
-      this.formationLabel.classList.remove('high-tension');
-    }
   }
 
   // === UPDATE ===
@@ -3686,7 +3579,6 @@ export class VisualEngine {
 
   dispose() {
     this.labelContainer.remove();
-    this.formationLabel.remove();
     if (this.visualizerCanvas) this.visualizerCanvas.remove();
     if (this.dataStreamCanvas) this.dataStreamCanvas.remove();
     this.particleGeometry.dispose();
