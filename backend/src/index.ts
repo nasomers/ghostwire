@@ -201,14 +201,21 @@ const bgpstream = new BGPStreamClient({
 // Active sources tracking
 const activeSources: string[] = [];
 
-// Start the server with TLS for secure WebSocket
+// Start the server
+const PORT = parseInt(process.env.PORT || '3333');
+const USE_TLS = process.env.NODE_ENV !== 'production' &&
+  await Bun.file('./key.pem').exists() &&
+  await Bun.file('./cert.pem').exists();
+
 const server = Bun.serve({
-  hostname: '10.0.0.100',
-  port: 3333,
-  tls: {
-    key: Bun.file('./key.pem'),
-    cert: Bun.file('./cert.pem'),
-  },
+  hostname: '0.0.0.0',
+  port: PORT,
+  ...(USE_TLS ? {
+    tls: {
+      key: Bun.file('./key.pem'),
+      cert: Bun.file('./cert.pem'),
+    },
+  } : {}),
 
   fetch(req, server) {
     const url = new URL(req.url);
@@ -293,7 +300,8 @@ const server = Bun.serve({
   },
 });
 
-console.log(`[Ghostwire] Server running on http://localhost:${server.port}`);
+const protocol = USE_TLS ? 'https' : 'http';
+console.log(`[Ghostwire] Server running on ${protocol}://0.0.0.0:${server.port}`);
 
 // Connect to all data sources
 async function startSources() {

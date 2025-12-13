@@ -23,7 +23,7 @@ import './style.css';
 
 // Configuration
 const WS_URL = import.meta.env.PROD
-  ? 'wss://ghostwire-api.ghostlaboratory.net/ws'
+  ? 'wss://ghostwire-api.fly.dev/ws'
   : 'wss://10.0.0.100:3333/ws';
 
 // DOM elements
