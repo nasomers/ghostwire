@@ -1,0 +1,20 @@
+{
+  "name": "ghostwire-frontend",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/three": "^0.182.0",
+    "@vitejs/plugin-basic-ssl": "^2.1.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  },
+  "dependencies": {
+    "three": "^0.182.0",
+    "tone": "^15.1.22"
+  }
+}
