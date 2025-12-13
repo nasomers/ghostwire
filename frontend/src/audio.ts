@@ -477,7 +477,7 @@ export class AudioEngine {
     this.timbreIndex++;
 
     // Oscillator type options for different synths
-    const oscTypes = ['sine', 'triangle', 'sawtooth', 'square'] as const;
+    const oscTypes = ['sine', 'triangle', 'sine4', 'triangle8'] as const;
     const softOscTypes = ['sine', 'triangle', 'sine4', 'triangle8'] as const;
 
     try {
@@ -502,12 +502,14 @@ export class AudioEngine {
       this.filter.frequency.rampTo(filterFreq, 4);
 
       // Bass character - alternates
-      const bassOsc = this.timbreIndex % 2 === 0 ? 'triangle' : 'sawtooth';
+      const bassOsc = this.timbreIndex % 2 === 0 ? 'triangle' : 'sine';
       this.bassSynth.set({ oscillator: { type: bassOsc } });
 
-      // Reverb character
-      const reverbDecay = 2 + (this.timbreIndex % 5);
+      // Reverb character - random decay and wet amount
+      const reverbDecay = 2 + Math.random() * 5;
+      const reverbWet = 0.15 + Math.random() * 0.35;
       this.reverb.decay = reverbDecay;
+      this.reverb.wet.rampTo(reverbWet, 2);
 
       // Delay time variations
       const delayTimes = ['8n.', '4n', '8n', '16n.', '4n.', '2n'];

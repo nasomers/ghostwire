@@ -1230,3 +1230,111 @@ body {
     min-width: 180px;
   }
 }
+
+/* ============================================
+   THREAT TICKER
+   ============================================ */
+
+#threat-ticker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 32px;
+  background: linear-gradient(180deg, rgba(0, 8, 4, 0.9) 0%, rgba(0, 8, 4, 0.6) 100%);
+  border-bottom: 1px solid rgba(51, 255, 102, 0.15);
+  z-index: 50;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+
+#threat-ticker.visible {
+  opacity: 1;
+}
+
+#threat-ticker.hidden {
+  display: none;
+}
+
+#ticker-content {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  white-space: nowrap;
+  animation: ticker-scroll 60s linear infinite;
+  padding-left: 100%;
+}
+
+@keyframes ticker-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-100%); }
+}
+
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 30px;
+  font-size: 11px;
+  color: var(--text);
+  border-right: 1px solid rgba(51, 255, 102, 0.1);
+}
+
+.ticker-item:last-child {
+  border-right: none;
+}
+
+.ticker-type {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 2px 6px;
+  border-radius: 2px;
+  font-weight: 500;
+}
+
+.ticker-type.ransomware { background: rgba(255, 0, 102, 0.4); color: #ff88aa; }
+.ticker-type.malware { background: rgba(255, 51, 68, 0.4); color: #ff8888; }
+.ticker-type.c2 { background: rgba(170, 68, 255, 0.4); color: #cc99ff; }
+.ticker-type.honeypot { background: rgba(255, 102, 0, 0.4); color: #ffbb77; }
+.ticker-type.phishing { background: rgba(0, 204, 255, 0.4); color: #77ddff; }
+.ticker-type.bruteforce { background: rgba(255, 170, 0, 0.4); color: #ffdd77; }
+.ticker-type.tor { background: rgba(34, 170, 68, 0.4); color: #77dd99; }
+.ticker-type.cert { background: rgba(102, 68, 255, 0.4); color: #aa99ff; }
+.ticker-type.breach { background: rgba(255, 0, 68, 0.4); color: #ff6688; }
+.ticker-type.hijack { background: rgba(255, 51, 0, 0.4); color: #ff8855; }
+.ticker-type.bgp { background: rgba(204, 0, 255, 0.4); color: #dd77ff; }
+
+.ticker-content {
+  color: var(--text);
+  opacity: 0.9;
+}
+
+.ticker-country {
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.7;
+}
+
+.ticker-time {
+  font-size: 9px;
+  color: var(--text-dim);
+  opacity: 0.5;
+}
+
+/* Critical event highlight in ticker */
+.ticker-item.critical {
+  background: rgba(255, 0, 60, 0.1);
+  animation: ticker-critical-pulse 2s ease-in-out infinite;
+}
+
+.ticker-item.critical .ticker-content {
+  color: #ff6688;
+  font-weight: 500;
+}
+
+@keyframes ticker-critical-pulse {
+  0%, 100% { background: rgba(255, 0, 60, 0.05); }
+  50% { background: rgba(255, 0, 60, 0.15); }
+}

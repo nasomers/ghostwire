@@ -79,6 +79,22 @@ interface DataPacket {
   size: number;
 }
 
+// Holographic HUD panel
+interface HUDPanel {
+  id: string;
+  label: string;
+  value: string | number;
+  sprite: THREE.Sprite;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  orbitAngle: number;       // Position around the scene
+  orbitRadius: number;      // Distance from center
+  orbitHeight: number;      // Y offset
+  driftOffset: number;      // For subtle floating motion
+  pulseIntensity: number;   // Glow on update (0-1)
+  lastValue: string | number;
+}
+
 // === THEMES ===
 
 interface Theme {
@@ -656,6 +672,16 @@ export class VisualEngine {
   private rotationAngle = 0;
   private dominantColor = new THREE.Color(currentTheme.void);
 
+  // Holographic HUD panels
+  private hudPanels: HUDPanel[] = [];
+  private hudGroup: THREE.Group = new THREE.Group();
+  private hudStats: Record<string, string | number> = {
+    status: 'Connecting',
+    nodes: 0,
+    tension: 0,
+    threats: 0,
+  };
+
   // Camera
   private cameraTarget = new THREE.Vector3(0, 0, 0);
   private targetCameraDistance = 160;
@@ -706,6 +732,9 @@ export class VisualEngine {
     this.dataFragmentMeshes = new THREE.Group();
     this.scene.add(this.dataFragmentMeshes);
 
+    // HUD panels group
+    this.scene.add(this.hudGroup);
+
     // Camera
     this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1, 1000);
     this.camera.position.set(0, 0, 160);
@@ -741,6 +770,7 @@ export class VisualEngine {
     this.initDataRain();
     this.initVisualizer();
     this.initPackets();
+    this.initHUD();
 
     // Show initial formation name
     this.showFormationName();
@@ -945,7 +975,7 @@ export class VisualEngine {
         uniform float tension;
         varying vec3 vColor;
         void main() {
-          gl_FragColor = vec4(vColor * (1.0 + tension * 0.5), 0.15 + tension * 0.1);
+          gl_FragColor = vec4(vColor * (1.5 + tension * 0.8), 0.5 + tension * 0.3);
         }
       `,
       transparent: true,
@@ -1142,6 +1172,210 @@ export class VisualEngine {
     this.scene.add(this.packetPoints);
   }
 
+  // === HOLOGRAPHIC HUD ===
+
+  private initHUD() {
+    // Create HUD panels for key stats - orbital scatter positioning
+    const panelConfigs = [
+      { id: 'status', label: 'STATUS', orbitAngle: -0.4, orbitRadius: 180, orbitHeight: 60 },
+      { id: 'nodes', label: 'NODES', orbitAngle: 0.3, orbitRadius: 190, orbitHeight: 40 },
+      { id: 'tension', label: 'TENSION', orbitAngle: 0.9, orbitRadius: 175, orbitHeight: -30 },
+      { id: 'threats', label: 'THREATS', orbitAngle: -1.0, orbitRadius: 185, orbitHeight: -50 },
+    ];
+
+    panelConfigs.forEach((config, i) => {
+      const panel = this.createHUDPanel(config.id, config.label, config.orbitAngle, config.orbitRadius, config.orbitHeight);
+      this.hudPanels.push(panel);
+    });
+  }
+
+  private createHUDPanel(id: string, label: string, orbitAngle: number, orbitRadius: number, orbitHeight: number): HUDPanel {
+    // Create canvas for glass panel texture
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d')!;
+
+    // Create sprite with canvas texture
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    const material = new THREE.SpriteMaterial({
+      map: texture,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      depthTest: false,
+    });
+
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(40, 20, 1);
+    this.hudGroup.add(sprite);
+
+    const panel: HUDPanel = {
+      id,
+      label,
+      value: this.hudStats[id] ?? 0,
+      sprite,
+      canvas,
+      ctx,
+      orbitAngle,
+      orbitRadius,
+      orbitHeight,
+      driftOffset: Math.random() * Math.PI * 2,
+      pulseIntensity: 0,
+      lastValue: this.hudStats[id] ?? 0,
+    };
+
+    // Initial render
+    this.renderHUDPanel(panel);
+
+    return panel;
+  }
+
+  private renderHUDPanel(panel: HUDPanel) {
+    const { ctx, canvas, label, value, pulseIntensity } = panel;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    // Clear
+    ctx.clearRect(0, 0, w, h);
+
+    // Glass panel background with glow
+    const glowIntensity = 0.15 + pulseIntensity * 0.3;
+    const borderGlow = 0.4 + pulseIntensity * 0.6;
+
+    // Outer glow
+    ctx.shadowColor = `rgba(${this.getThemeRGB()}, ${glowIntensity})`;
+    ctx.shadowBlur = 20 + pulseIntensity * 15;
+
+    // Frosted glass background
+    ctx.fillStyle = `rgba(10, 20, 30, ${0.4 + pulseIntensity * 0.2})`;
+    ctx.beginPath();
+    ctx.roundRect(4, 4, w - 8, h - 8, 8);
+    ctx.fill();
+
+    // Glass border
+    ctx.strokeStyle = `rgba(${this.getThemeRGB()}, ${borderGlow})`;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(4, 4, w - 8, h - 8, 8);
+    ctx.stroke();
+
+    // Scan line effect
+    ctx.fillStyle = `rgba(${this.getThemeRGB()}, 0.03)`;
+    for (let y = 10; y < h - 10; y += 4) {
+      ctx.fillRect(8, y, w - 16, 1);
+    }
+
+    // Reset shadow for text
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = `rgba(${this.getThemeRGB()}, 0.8)`;
+
+    // Label
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = `rgba(${this.getThemeRGB()}, 0.6)`;
+    ctx.textAlign = 'center';
+    ctx.fillText(label, w / 2, 28);
+
+    // Value
+    ctx.font = 'bold 28px "JetBrains Mono", monospace';
+    ctx.fillStyle = `rgba(255, 255, 255, ${0.9 + pulseIntensity * 0.1})`;
+    ctx.shadowColor = `rgba(${this.getThemeRGB()}, 1)`;
+    ctx.shadowBlur = 12 + pulseIntensity * 8;
+
+    const displayValue = typeof value === 'number'
+      ? (panel.id === 'tension' ? value.toFixed(2) : value.toLocaleString())
+      : value;
+    ctx.fillText(String(displayValue), w / 2, 75);
+
+    // Corner accents
+    ctx.strokeStyle = `rgba(${this.getThemeRGB()}, ${0.5 + pulseIntensity * 0.5})`;
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 0;
+
+    // Top left corner
+    ctx.beginPath();
+    ctx.moveTo(8, 20);
+    ctx.lineTo(8, 8);
+    ctx.lineTo(20, 8);
+    ctx.stroke();
+
+    // Top right corner
+    ctx.beginPath();
+    ctx.moveTo(w - 8, 20);
+    ctx.lineTo(w - 8, 8);
+    ctx.lineTo(w - 20, 8);
+    ctx.stroke();
+
+    // Bottom left corner
+    ctx.beginPath();
+    ctx.moveTo(8, h - 20);
+    ctx.lineTo(8, h - 8);
+    ctx.lineTo(20, h - 8);
+    ctx.stroke();
+
+    // Bottom right corner
+    ctx.beginPath();
+    ctx.moveTo(w - 8, h - 20);
+    ctx.lineTo(w - 8, h - 8);
+    ctx.lineTo(w - 20, h - 8);
+    ctx.stroke();
+
+    // Update texture
+    (panel.sprite.material as THREE.SpriteMaterial).map!.needsUpdate = true;
+  }
+
+  private getThemeRGB(): string {
+    const color = new THREE.Color(currentTheme.accent1);
+    return `${Math.floor(color.r * 255)}, ${Math.floor(color.g * 255)}, ${Math.floor(color.b * 255)}`;
+  }
+
+  private updateHUD(deltaTime: number) {
+    const baseAngle = this.time * 0.05; // Slow drift
+
+    this.hudPanels.forEach((panel) => {
+      // Check for value changes and trigger pulse
+      const newValue = this.hudStats[panel.id];
+      if (newValue !== panel.lastValue) {
+        panel.pulseIntensity = 1;
+        panel.lastValue = newValue;
+        panel.value = newValue;
+      }
+
+      // Decay pulse
+      panel.pulseIntensity = Math.max(0, panel.pulseIntensity - deltaTime * 2);
+
+      // Calculate orbital position with drift
+      const drift = Math.sin(this.time * 0.3 + panel.driftOffset) * 5;
+      const angle = panel.orbitAngle + baseAngle * 0.1;
+
+      // Position in world space
+      panel.sprite.position.x = Math.sin(angle) * panel.orbitRadius;
+      panel.sprite.position.y = panel.orbitHeight + Math.sin(this.time * 0.5 + panel.driftOffset) * 3;
+      panel.sprite.position.z = Math.cos(angle) * panel.orbitRadius * 0.3 + drift;
+
+      // Billboard: sprites automatically face camera, but we can adjust scale based on distance
+      const distToCamera = panel.sprite.position.distanceTo(this.camera.position);
+      const scaleFactor = Math.min(1.2, Math.max(0.8, 150 / distToCamera));
+      panel.sprite.scale.set(40 * scaleFactor, 20 * scaleFactor, 1);
+
+      // Re-render if pulsing or periodically for scan line animation
+      if (panel.pulseIntensity > 0.01 || Math.floor(this.time * 4) !== Math.floor((this.time - deltaTime) * 4)) {
+        this.renderHUDPanel(panel);
+      }
+    });
+  }
+
+  // Public method to update HUD stats from main.ts
+  updateHUDStats(stats: { status?: string; nodes?: number; tension?: number; threats?: number }) {
+    if (stats.status !== undefined) this.hudStats.status = stats.status;
+    if (stats.nodes !== undefined) this.hudStats.nodes = stats.nodes;
+    if (stats.tension !== undefined) this.hudStats.tension = stats.tension;
+    if (stats.threats !== undefined) this.hudStats.threats = stats.threats;
+  }
+
   // Spawn a data packet that travels along a connection line
   private spawnPacket(startIdx: number, color: THREE.Color) {
     if (this.dataPackets.length >= this.maxPackets) return;
@@ -1274,6 +1508,9 @@ export class VisualEngine {
 
     // Update data packets
     this.updatePackets(deltaTime);
+
+    // Update holographic HUD
+    this.updateHUD(deltaTime);
 
     // Update glitch
     this.updateGlitch(deltaTime);
@@ -1507,7 +1744,7 @@ export class VisualEngine {
     this.packetMaterial.uniforms.time.value = this.time;
   }
 
-  // Spawn a 3D data fragment
+  // Spawn a 3D data fragment (internal, smaller)
   private spawnDataFragment(text: string, position: THREE.Vector3, color: THREE.Color) {
     if (this.dataFragments.length >= this.maxFragments) return;
     if (this.isMobileDevice) return; // Skip on mobile for performance
@@ -1555,6 +1792,92 @@ export class VisualEngine {
       scale: 1,
       rotation: (Math.random() - 0.5) * 0.3,
       rotationSpeed: (Math.random() - 0.5) * 0.5,
+    });
+  }
+
+  // Public: Spawn event text fragment at periphery (for threat feed)
+  spawnEventFragment(type: string, content: string, severity: 'critical' | 'high' | 'medium' | 'low' = 'medium') {
+    if (this.dataFragments.length >= this.maxFragments) return;
+    if (this.isMobileDevice) return;
+
+    // Severity colors
+    const severityColors: Record<string, number> = {
+      critical: 0xff0044,
+      high: 0xff6600,
+      medium: currentTheme.accent1,
+      low: currentTheme.accent3,
+    };
+    const color = new THREE.Color(severityColors[severity] || currentTheme.accent1);
+
+    // Create canvas with enhanced styling
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    canvas.width = 512;
+    canvas.height = 64;
+
+    // Background glow
+    const gradient = ctx.createRadialGradient(256, 32, 0, 256, 32, 256);
+    gradient.addColorStop(0, `rgba(${Math.floor(color.r * 255)}, ${Math.floor(color.g * 255)}, ${Math.floor(color.b * 255)}, 0.15)`);
+    gradient.addColorStop(1, 'transparent');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Type label
+    ctx.font = 'bold 14px JetBrains Mono, monospace';
+    ctx.fillStyle = `rgba(${Math.floor(color.r * 255)}, ${Math.floor(color.g * 255)}, ${Math.floor(color.b * 255)}, 0.8)`;
+    ctx.textAlign = 'center';
+    ctx.fillText(type.toUpperCase(), canvas.width / 2, 20);
+
+    // Content text with glow
+    ctx.shadowColor = `#${color.getHexString()}`;
+    ctx.shadowBlur = 10;
+    ctx.font = 'bold 22px JetBrains Mono, monospace';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(content.substring(0, 40), canvas.width / 2, 48);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+
+    const material = new THREE.MeshBasicMaterial({
+      map: texture,
+      transparent: true,
+      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    // Larger plane for event fragments
+    const geometry = new THREE.PlaneGeometry(80, 10);
+    const mesh = new THREE.Mesh(geometry, material);
+
+    // Spawn at random position on the periphery
+    const angle = Math.random() * Math.PI * 2;
+    const radius = 120 + Math.random() * 40;
+    const height = (Math.random() - 0.5) * 80;
+
+    const position = new THREE.Vector3(
+      Math.sin(angle) * radius,
+      height,
+      Math.cos(angle) * radius * 0.4
+    );
+    mesh.position.copy(position);
+
+    this.dataFragmentMeshes.add(mesh);
+    this.dataFragments.push({
+      position: position.clone(),
+      velocity: new THREE.Vector3(
+        Math.sin(angle) * 3,  // Drift outward
+        2 + Math.random() * 3,
+        Math.cos(angle) * 2
+      ),
+      text: content,
+      color,
+      lifetime: 0,
+      maxLifetime: 5 + Math.random() * 3,
+      scale: 1.2,
+      rotation: 0,
+      rotationSpeed: 0,
     });
   }
 
@@ -1634,6 +1957,10 @@ export class VisualEngine {
 
     const particlePositions = this.particleGeometry.attributes.position.array as Float32Array;
 
+    // Get theme accent color for lines
+    const accent = new THREE.Color(currentTheme.accent1);
+    const baseIntensity = 0.25 + this.tension * 0.15;
+
     if (formation.connectionStyle === 'proximity') {
       // Connect nearby particles
       for (let i = 0; i < this.particleCount && lineCount < maxLines; i++) {
@@ -1659,13 +1986,13 @@ export class VisualEngine {
             positions.array[idx + 5] = jz;
 
             const alpha = 1 - dist / formation.connectionDistance;
-            const c = 0.03 * alpha;
-            colors.array[idx] = c * 0.5;
-            colors.array[idx + 1] = c;
-            colors.array[idx + 2] = c;
-            colors.array[idx + 3] = c * 0.5;
-            colors.array[idx + 4] = c;
-            colors.array[idx + 5] = c;
+            const intensity = baseIntensity * alpha;
+            colors.array[idx] = accent.r * intensity;
+            colors.array[idx + 1] = accent.g * intensity;
+            colors.array[idx + 2] = accent.b * intensity;
+            colors.array[idx + 3] = accent.r * intensity;
+            colors.array[idx + 4] = accent.g * intensity;
+            colors.array[idx + 5] = accent.b * intensity;
 
             lineCount++;
           }
@@ -1682,13 +2009,13 @@ export class VisualEngine {
         positions.array[idx + 4] = particlePositions[(i + 1) * 3 + 1];
         positions.array[idx + 5] = particlePositions[(i + 1) * 3 + 2];
 
-        const c = 0.04;
-        colors.array[idx] = c * 0.5;
-        colors.array[idx + 1] = c;
-        colors.array[idx + 2] = c;
-        colors.array[idx + 3] = c * 0.5;
-        colors.array[idx + 4] = c;
-        colors.array[idx + 5] = c;
+        const intensity = baseIntensity * 1.2;
+        colors.array[idx] = accent.r * intensity;
+        colors.array[idx + 1] = accent.g * intensity;
+        colors.array[idx + 2] = accent.b * intensity;
+        colors.array[idx + 3] = accent.r * intensity;
+        colors.array[idx + 4] = accent.g * intensity;
+        colors.array[idx + 5] = accent.b * intensity;
 
         lineCount++;
       }
@@ -1718,13 +2045,13 @@ export class VisualEngine {
               positions.array[idx + 4] = jy;
               positions.array[idx + 5] = jz;
 
-              const c = 0.03;
-              colors.array[idx] = c * 0.5;
-              colors.array[idx + 1] = c;
-              colors.array[idx + 2] = c;
-              colors.array[idx + 3] = c * 0.5;
-              colors.array[idx + 4] = c;
-              colors.array[idx + 5] = c;
+              const intensity = baseIntensity;
+              colors.array[idx] = accent.r * intensity;
+              colors.array[idx + 1] = accent.g * intensity;
+              colors.array[idx + 2] = accent.b * intensity;
+              colors.array[idx + 3] = accent.r * intensity;
+              colors.array[idx + 4] = accent.g * intensity;
+              colors.array[idx + 5] = accent.b * intensity;
 
               lineCount++;
             }
