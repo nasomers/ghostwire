@@ -110,9 +110,8 @@ const COUNTRY_NAMES: Record<string, string> = {
 const controlsPanel = document.getElementById('controls-panel')!;
 const toggleControlsBtn = document.getElementById('toggle-controls')!;
 const volumeSlider = document.getElementById('volume-slider')! as HTMLInputElement;
-const reverbSlider = document.getElementById('reverb-slider')! as HTMLInputElement;
-const rootSelect = document.getElementById('root-select')! as HTMLSelectElement;
-const scaleSelect = document.getElementById('scale-select')! as HTMLSelectElement;
+const keySelect = document.getElementById('key-select')! as HTMLSelectElement;
+const modeSelect = document.getElementById('mode-select')! as HTMLSelectElement;
 const paletteSelect = document.getElementById('palette-select')! as HTMLSelectElement;
 
 // Engine instances
@@ -318,11 +317,13 @@ function initSocket() {
 
     // Route events to appropriate handlers
     try {
+      const audioReady = audio.isInitialized();
+
       switch (event.type) {
         case 'urlhaus': {
           const hit = event.data as URLhausHit;
           eventCounts.urlhaus++;
-          audio.playMalwareUrl(hit);
+          if (audioReady) audio.playMalwareUrl(hit);
           visuals.handleMalwareUrl(hit);
           const threat = hit.threat || 'malware';
           lastSeen.urlhaus = threat;
@@ -338,7 +339,7 @@ function initSocket() {
         case 'greynoise': {
           const data = event.data as GreyNoiseData;
           eventCounts.greynoise = data.scannerCount;
-          audio.updateNoiseFloor(data);
+          if (audioReady) audio.updateNoiseFloor(data);
           visuals.updateScannerNoise(data);
           lastSeen.greynoise = data.topTags?.[0] || data.scannerTypes?.[0] || 'mass scanning';
           // Don't add to feed - too frequent, just update stats
@@ -348,7 +349,7 @@ function initSocket() {
         case 'dshield': {
           const attack = event.data as DShieldAttack;
           eventCounts.dshield++;
-          audio.playHoneypotAttack(attack);
+          if (audioReady) audio.playHoneypotAttack(attack);
           visuals.handleHoneypotAttack(attack);
           lastSeen.dshield = `port ${attack.targetPort}`;
           addFeedEvent(
@@ -364,7 +365,7 @@ function initSocket() {
         case 'feodo': {
           const c2 = event.data as FeodoC2;
           eventCounts.feodo++;
-          audio.playBotnetC2(c2);
+          if (audioReady) audio.playBotnetC2(c2);
           visuals.handleBotnetC2(c2);
           lastSeen.feodo = c2.malware || 'Botnet';
           addFeedEvent(
@@ -380,7 +381,7 @@ function initSocket() {
         case 'ransomware': {
           const victim = event.data as RansomwareVictim;
           eventCounts.ransomware++;
-          audio.playRansomwareVictim(victim);
+          if (audioReady) audio.playRansomwareVictim(victim);
           visuals.handleRansomwareVictim(victim);
           lastSeen.ransomware = victim.group;
           addFeedEvent(
@@ -396,7 +397,7 @@ function initSocket() {
         case 'phishing': {
           const phish = event.data as PhishingURL;
           eventCounts.phishing++;
-          audio.playPhishing(phish);
+          if (audioReady) audio.playPhishing(phish);
           visuals.handlePhishing(phish);
           lastSeen.phishing = phish.targetBrand || phish.domain;
           addFeedEvent(
@@ -411,7 +412,7 @@ function initSocket() {
         case 'sslbl': {
           const entry = event.data as SSLBlacklistEntry;
           eventCounts.sslbl++;
-          audio.playMaliciousCert(entry);
+          if (audioReady) audio.playMaliciousCert(entry);
           visuals.handleMaliciousCert(entry);
           lastSeen.sslbl = entry.malware;
           addFeedEvent(
@@ -426,7 +427,7 @@ function initSocket() {
         case 'bruteforce': {
           const attack = event.data as BruteforceAttack;
           eventCounts.bruteforce++;
-          audio.playBruteforce(attack);
+          if (audioReady) audio.playBruteforce(attack);
           visuals.handleBruteforce(attack);
           const attackType = attack.attackType || 'SSH';
           lastSeen.bruteforce = attackType;
@@ -443,7 +444,7 @@ function initSocket() {
         case 'tor': {
           const node = event.data as TorExitNode;
           eventCounts.tor++;
-          audio.playTorNode(node);
+          if (audioReady) audio.playTorNode(node);
           visuals.handleTorNode(node);
           lastSeen.tor = node.nickname || node.ip;
           addFeedEvent(
@@ -459,7 +460,7 @@ function initSocket() {
         case 'hibp': {
           const breach = event.data as HIBPBreach;
           eventCounts.hibp++;
-          audio.playBreach(breach);
+          if (audioReady) audio.playBreach(breach);
           visuals.handleBreach(breach);
           lastSeen.hibp = breach.title;
           const pwnCount = breach.pwnCount.toLocaleString();
@@ -475,7 +476,7 @@ function initSocket() {
         case 'spamhaus': {
           const drop = event.data as SpamhausDrop;
           eventCounts.spamhaus++;
-          audio.playSpamhaus(drop);
+          if (audioReady) audio.playSpamhaus(drop);
           visuals.handleSpamhaus(drop);
           lastSeen.spamhaus = drop.cidr;
           const addrCount = drop.numAddresses.toLocaleString();
@@ -491,7 +492,7 @@ function initSocket() {
         case 'bgp': {
           const bgpEvent = event.data as BGPEvent;
           eventCounts.bgp++;
-          audio.playBGPEvent(bgpEvent);
+          if (audioReady) audio.playBGPEvent(bgpEvent);
           visuals.handleBGPEvent(bgpEvent);
           lastSeen.bgp = bgpEvent.prefix;
           const severity = bgpEvent.severity === 'critical' ? 'critical' :
@@ -527,25 +528,25 @@ async function start() {
   bootScreen.classList.remove('hidden');
   await runBootSequence();
 
+  // Mark as running and start render loop FIRST (before audio)
+  isRunning = true;
+  lastFrameTime = performance.now();
+  requestAnimationFrame(renderLoop);
+
+  // Show UI panels
+  document.getElementById('stats')?.classList.add('visible');
+  document.getElementById('controls-container')?.classList.add('visible');
+  document.getElementById('event-feed')?.classList.add('visible');
+  document.getElementById('instructions')?.classList.add('visible');
+
+  // Initialize audio separately - if it fails, visuals still work
   try {
     await audio.init();
-    isRunning = true;
-
-    // Show stats, controls, event feed, and instructions
-    document.getElementById('stats')?.classList.add('visible');
-    document.getElementById('controls-container')?.classList.add('visible');
-    document.getElementById('event-feed')?.classList.add('visible');
-    document.getElementById('instructions')?.classList.add('visible');
-
-    // Start render loop
-    lastFrameTime = performance.now();
-    requestAnimationFrame(renderLoop);
+    console.log('[Ghostwire] Audio initialized successfully');
   } catch (err) {
-    console.error('[Ghostwire] Failed to start audio:', err);
-    statusEl.textContent = 'Audio initialization failed - Check browser permissions';
-    startBtn.disabled = false;
-    bootScreen.classList.add('hidden');
-    overlay.classList.remove('hidden');
+    console.warn('[Ghostwire] Audio failed to initialize (visuals will still work):', err);
+    // Don't block the experience - just log the error
+    // User can still enjoy the visuals
   }
 }
 
@@ -557,8 +558,14 @@ function renderLoop(currentTime: number) {
     const deltaTime = Math.min((currentTime - lastFrameTime) / 1000, 0.1); // Cap delta
     lastFrameTime = currentTime;
 
-    // Update engines
-    audio.update(deltaTime);
+    // Update audio only if initialized
+    if (audio.isInitialized()) {
+      audio.update(deltaTime);
+      // Pass waveform data to visuals for visualizer
+      visuals.setWaveformData(audio.getWaveform());
+    }
+
+    // Always update and render visuals
     visuals.update(deltaTime);
     visuals.render();
 
@@ -628,25 +635,17 @@ function setupControls() {
     });
   }
 
-  // Reverb
-  if (reverbSlider) {
-    reverbSlider.addEventListener('input', () => {
-      const value = parseFloat(reverbSlider.value);
-      audio.setReverbAmount(value);
+  // Key (root note)
+  if (keySelect) {
+    keySelect.addEventListener('change', () => {
+      audio.setRoot(keySelect.value);
     });
   }
 
-  // Root note
-  if (rootSelect) {
-    rootSelect.addEventListener('change', () => {
-      audio.setRoot(rootSelect.value);
-    });
-  }
-
-  // Scale
-  if (scaleSelect) {
-    scaleSelect.addEventListener('change', () => {
-      audio.setScale(scaleSelect.value as any);
+  // Mode (scale)
+  if (modeSelect) {
+    modeSelect.addEventListener('change', () => {
+      audio.setScale(modeSelect.value as any);
     });
   }
 

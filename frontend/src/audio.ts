@@ -1,5 +1,5 @@
-// Ghostwire Audio Engine v5 - Generative Music
-// Threat data drives actual melodic, rhythmic, harmonic music
+// Ghostwire Audio Engine v6 - Evolving Generative Music
+// Threat data drives melodic, rhythmic, harmonic music that evolves over time
 
 import * as Tone from 'tone';
 import type {
@@ -19,15 +19,21 @@ import type {
 
 // === MUSICAL CONSTANTS ===
 
-const SCALES = {
+const SCALES: Record<string, number[]> = {
   minor: [0, 2, 3, 5, 7, 8, 10],
   dorian: [0, 2, 3, 5, 7, 9, 10],
   phrygian: [0, 1, 3, 5, 7, 8, 10],
   harmonicMinor: [0, 2, 3, 5, 7, 8, 11],
   pentatonic: [0, 3, 5, 7, 10],
+  locrian: [0, 1, 3, 5, 6, 8, 10],
+  lydian: [0, 2, 4, 6, 7, 9, 11],
+  wholeTone: [0, 2, 4, 6, 8, 10],
+  blues: [0, 3, 5, 6, 7, 10],
+  japanese: [0, 1, 5, 7, 8],
 };
 
-const CHORD_PROGRESSIONS = {
+
+const CHORD_PROGRESSIONS: Record<string, number[][]> = {
   dark: [
     [0, 3, 7],      // i (minor)
     [5, 8, 0],      // iv
@@ -46,9 +52,32 @@ const CHORD_PROGRESSIONS = {
     [3, 7, 10],     // iii
     [0, 3, 7],      // i
   ],
+  descending: [
+    [0, 3, 7],      // i
+    [-1, 2, 6],     // VII
+    [-3, 0, 4],     // VI
+    [-5, -2, 2],    // V
+  ],
+  chromatic: [
+    [0, 3, 7],      // i
+    [1, 4, 8],      // bII
+    [2, 5, 9],      // II
+    [0, 3, 7],      // i
+  ],
+  spacious: [
+    [0, 7, 12],     // power + octave
+    [5, 12, 17],    // open voicing
+    [-5, 0, 7],     // bass drop
+    [0, 7, 14],     // wide
+  ],
 };
 
+const PROGRESSION_SEQUENCE = [
+  'dark', 'tense', 'ethereal', 'descending', 'chromatic', 'spacious'
+];
+
 const ROOTS = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
 
 // Convert scale degree to note name
 function degreeToNote(degree: number, scale: number[], root: string, octave: number): string {
@@ -77,7 +106,8 @@ interface ArpPattern {
   velocities: number[];
 }
 
-const ARPS: Record<string, ArpPattern> = {
+// Base patterns that can be mutated
+const BASE_ARPS: Record<string, ArpPattern> = {
   rise: {
     degrees: [0, 2, 4, 7, 9, 12],
     durations: ['16n', '16n', '16n', '16n', '8n', '4n'],
@@ -108,7 +138,43 @@ const ARPS: Record<string, ArpPattern> = {
     durations: ['16n', '8n', '4n'],
     velocities: [1.0, 0.4, 0.9],
   },
+  spiral: {
+    degrees: [0, 2, 4, 2, 4, 7, 4, 7, 9],
+    durations: ['16n', '16n', '16n', '16n', '16n', '16n', '8n', '8n', '4n'],
+    velocities: [0.6, 0.5, 0.7, 0.5, 0.8, 0.6, 0.9, 0.7, 1.0],
+  },
+  pendulum: {
+    degrees: [0, 7, -3, 9, -5, 11, 0],
+    durations: ['8n', '8n', '8n', '8n', '8n', '8n', '4n'],
+    velocities: [0.8, 0.7, 0.8, 0.6, 0.9, 0.5, 1.0],
+  },
+  trill: {
+    degrees: [0, 2, 0, 2, 0, 2, 4],
+    durations: ['32n', '32n', '32n', '32n', '32n', '32n', '4n'],
+    velocities: [0.7, 0.6, 0.7, 0.6, 0.8, 0.7, 0.9],
+  },
+  wide: {
+    degrees: [0, 12, 7, 19, 4, 16],
+    durations: ['8n', '8n', '8n', '8n', '8n', '2n'],
+    velocities: [0.8, 0.5, 0.7, 0.4, 0.9, 0.6],
+  },
+  dark: {
+    degrees: [0, -5, -3, 0, 3, 0],
+    durations: ['8n', '8n', '8n', '8n', '8n', '4n'],
+    velocities: [0.9, 0.7, 0.8, 0.6, 0.7, 0.5],
+  },
+  chaos: {
+    degrees: [0, 11, -4, 9, -7, 14, 2],
+    durations: ['16n', '16n', '8n', '16n', '16n', '8n', '4n'],
+    velocities: [1.0, 0.5, 0.9, 0.6, 0.8, 0.7, 0.4],
+  },
 };
+
+const ARP_NAMES = Object.keys(BASE_ARPS);
+
+// === TEXTURE TYPES ===
+
+type TextureMode = 'melody' | 'chords' | 'arps';
 
 // === AUDIO ENGINE ===
 
@@ -135,10 +201,6 @@ export class AudioEngine {
   private bellSynth!: Tone.PolySynth;      // Bell-like tones
   private pluckSynth!: Tone.PluckSynth;    // Plucked strings
 
-  // Synths - percussive
-  private kickSynth!: Tone.MembraneSynth;
-  private hihatSynth!: Tone.MetalSynth;
-  private snareSynth!: Tone.NoiseSynth;
 
   // Synths - textural
   private droneSynth!: Tone.PolySynth;
@@ -146,19 +208,39 @@ export class AudioEngine {
   private noiseGain!: Tone.Gain;
 
   // Musical state
-  private currentRoot = 'D';
-  private currentScale = SCALES.minor;
+  private currentRoot = 'C';
+  private currentScale = SCALES.phrygian;
+  private currentScaleName = 'phrygian';
   private currentProgression = CHORD_PROGRESSIONS.dark;
+  private currentProgressionName = 'dark';
   private chordIndex = 0;
   private tension = 0;
   private activity = 0;
   private bpm = 75;
+
+  // Texture system - alternates between melody/chords/arps
+  private currentTexture: TextureMode = 'melody';
+  private textureIndex = 0;
+  private readonly textureSequence: TextureMode[] = ['melody', 'arps', 'chords', 'melody', 'chords', 'arps'];
+
+  // Evolution state - gets trippier over time
+  private evolutionTime = 0; // total seconds since start
+  private evolutionPhase = 0; // 0-10, increases every ~2 minutes
+  private progressionIndex = 0;
+  private arpMutationLevel = 0; // 0-1, how much to mutate arps
+  private octaveSpread = 0; // how wide the octave range gets
+  private polyrhythmLevel = 0; // adds more complex rhythms
 
   // Timing
   private lastChordChange = 0;
   private chordInterval = 4000; // 4 seconds per chord
   private lastBeat = 0;
   private beatInterval = 800; // ms per beat at 75bpm
+  private lastEvolution = 0;
+  private evolutionInterval = 90000; // evolve every 1.5 minutes
+
+  // Timbre state
+  private timbreIndex = 0; // for cycling timbres independently
   private pendingArps: Array<{
     synth: Tone.PolySynth;
     pattern: ArpPattern;
@@ -241,10 +323,10 @@ export class AudioEngine {
     // Lead - clean, clear, slightly warm
     this.leadSynth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'triangle8' },
-      envelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 0.8 },
+      envelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 0.6 },
       volume: -10,
     });
-    this.leadSynth.maxPolyphony = 8;
+    this.leadSynth.maxPolyphony = 12;
     this.leadSynth.connect(this.chorus);
 
     // Pad - lush, sustained
@@ -275,19 +357,19 @@ export class AudioEngine {
     // Arp - shimmery, crystal
     this.arpSynth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'sine' },
-      envelope: { attack: 0.01, decay: 0.15, sustain: 0.1, release: 0.4 },
+      envelope: { attack: 0.01, decay: 0.15, sustain: 0.1, release: 0.3 },
       volume: -14,
     });
-    this.arpSynth.maxPolyphony = 16;
+    this.arpSynth.maxPolyphony = 24;
     this.arpSynth.connect(this.delay);
 
     // Bell - glassy
     this.bellSynth = new Tone.PolySynth(Tone.Synth, {
       oscillator: { type: 'sine' },
-      envelope: { attack: 0.001, decay: 2, sustain: 0, release: 1.5 },
+      envelope: { attack: 0.001, decay: 1.5, sustain: 0, release: 1 },
       volume: -18,
     });
-    this.bellSynth.maxPolyphony = 8;
+    this.bellSynth.maxPolyphony = 16;
     this.bellSynth.connect(this.reverb);
 
     // Pluck
@@ -298,34 +380,6 @@ export class AudioEngine {
       volume: -12,
     });
     this.pluckSynth.connect(this.delay);
-
-    // === PERCUSSIVE SYNTHS ===
-
-    this.kickSynth = new Tone.MembraneSynth({
-      pitchDecay: 0.05,
-      octaves: 4,
-      envelope: { attack: 0.001, decay: 0.2, sustain: 0, release: 0.2 },
-      volume: -12,
-    });
-    this.kickSynth.connect(this.masterComp);
-
-    this.hihatSynth = new Tone.MetalSynth({
-      frequency: 200,
-      envelope: { attack: 0.001, decay: 0.05, release: 0.01 },
-      harmonicity: 5.1,
-      modulationIndex: 32,
-      resonance: 4000,
-      octaves: 1.5,
-      volume: -24,
-    });
-    this.hihatSynth.connect(this.masterComp);
-
-    this.snareSynth = new Tone.NoiseSynth({
-      noise: { type: 'white' },
-      envelope: { attack: 0.001, decay: 0.1, sustain: 0, release: 0.1 },
-      volume: -18,
-    });
-    this.snareSynth.connect(this.masterComp);
 
     // === TEXTURAL ===
 
@@ -350,11 +404,119 @@ export class AudioEngine {
     // Start ambient chord cycle
     this.startChordCycle();
 
-    // Start rhythm
-    this.startRhythm();
+    // Start evolution system
+    this.startEvolution();
+
+    // Start texture cycling
+    this.startTextureCycle();
 
     this.initialized = true;
-    console.log('[Audio v5] Generative music engine ready');
+    console.log('[Audio v6] Evolving generative music engine ready');
+  }
+
+  // === EVOLUTION SYSTEM ===
+
+  private startEvolution() {
+    // Check for evolution every 30 seconds
+    setInterval(() => {
+      if (!this.initialized) return;
+      this.evolutionTime += 30;
+      this.checkEvolution();
+    }, 30000);
+
+    // Timbre changes more frequently (every 30-45 seconds)
+    setInterval(() => {
+      if (!this.initialized) return;
+      this.evolveTimbres();
+    }, 30000 + Math.random() * 15000);
+  }
+
+  private checkEvolution() {
+    // Every 1.5 minutes, evolve to next phase
+    const newPhase = Math.floor(this.evolutionTime / 90);
+    if (newPhase > this.evolutionPhase && newPhase <= 12) {
+      this.evolutionPhase = newPhase;
+      this.evolve();
+    }
+
+    // Gradually increase mutation level (faster ramp)
+    this.arpMutationLevel = Math.min(1, this.evolutionTime / 450); // max at 7.5 min
+    this.octaveSpread = Math.min(2, this.evolutionTime / 240); // max 2 octaves at 4 min
+    this.polyrhythmLevel = Math.min(1, this.evolutionTime / 360); // max at 6 min
+  }
+
+  private evolve() {
+    console.log(`[Audio] Evolution phase ${this.evolutionPhase}`);
+
+    // Change progression every phase
+    this.progressionIndex = (this.progressionIndex + 1) % PROGRESSION_SEQUENCE.length;
+    this.currentProgressionName = PROGRESSION_SEQUENCE[this.progressionIndex];
+    this.currentProgression = CHORD_PROGRESSIONS[this.currentProgressionName];
+    console.log(`[Audio] Progression change: ${this.currentProgressionName}`);
+
+    // Tempo drift at higher phases
+    if (this.evolutionPhase >= 5) {
+      const tempoShift = (Math.random() - 0.5) * 10;
+      this.bpm = Math.max(60, Math.min(100, 75 + tempoShift));
+      Tone.getTransport().bpm.rampTo(this.bpm, 4);
+    }
+
+    // Increase effect intensity
+    if (this.evolutionPhase >= 3) {
+      this.chorus.wet.rampTo(0.15 + this.evolutionPhase * 0.03, 2);
+    }
+    if (this.evolutionPhase >= 6) {
+      this.delay.feedback.rampTo(0.25 + this.evolutionPhase * 0.02, 2);
+    }
+
+    // Evolve synth timbres
+    this.evolveTimbres();
+  }
+
+  private evolveTimbres() {
+    this.timbreIndex++;
+
+    // Oscillator type options for different synths
+    const oscTypes = ['sine', 'triangle', 'sawtooth', 'square'] as const;
+    const softOscTypes = ['sine', 'triangle', 'sine4', 'triangle8'] as const;
+
+    try {
+      // Lead synth - cycle through oscillator types
+      const leadOsc = oscTypes[this.timbreIndex % oscTypes.length];
+      this.leadSynth.set({ oscillator: { type: leadOsc } });
+      console.log(`[Audio] Timbre change - Lead: ${leadOsc}`);
+
+      // Arp synth - stay cleaner but vary
+      const arpOsc = softOscTypes[this.timbreIndex % softOscTypes.length];
+      this.arpSynth.set({ oscillator: { type: arpOsc } });
+
+      // Pad synth - evolve envelope
+      const padAttack = 0.8 + (this.timbreIndex % 4) * 0.4;
+      const padRelease = 2 + (this.timbreIndex % 3);
+      this.padSynth.set({
+        envelope: { attack: padAttack, release: padRelease }
+      });
+
+      // Filter - varies more dynamically
+      const filterFreq = 1200 + (this.timbreIndex % 6) * 400;
+      this.filter.frequency.rampTo(filterFreq, 4);
+
+      // Bass character - alternates
+      const bassOsc = this.timbreIndex % 2 === 0 ? 'triangle' : 'sawtooth';
+      this.bassSynth.set({ oscillator: { type: bassOsc } });
+
+      // Reverb character
+      const reverbDecay = 2 + (this.timbreIndex % 5);
+      this.reverb.decay = reverbDecay;
+
+      // Delay time variations
+      const delayTimes = ['8n.', '4n', '8n', '16n.', '4n.', '2n'];
+      const delayTime = delayTimes[this.timbreIndex % delayTimes.length];
+      this.delay.delayTime.rampTo(delayTime, 2);
+
+    } catch (e) {
+      // Ignore errors from synth modifications
+    }
   }
 
   isInitialized() {
@@ -378,15 +540,43 @@ export class AudioEngine {
   private advanceChord() {
     this.chordIndex = (this.chordIndex + 1) % this.currentProgression.length;
 
-    // Occasionally change progression based on tension
-    if (this.chordIndex === 0 && Math.random() < 0.3) {
-      if (this.tension > 0.6) {
-        this.currentProgression = CHORD_PROGRESSIONS.tense;
-      } else if (this.tension < 0.3) {
-        this.currentProgression = CHORD_PROGRESSIONS.ethereal;
-      } else {
-        this.currentProgression = CHORD_PROGRESSIONS.dark;
+    // Change progression based on evolution phase and tension
+    if (this.chordIndex === 0) {
+      // More frequent progression changes at higher evolution
+      const changeChance = 0.2 + this.evolutionPhase * 0.08;
+
+      if (Math.random() < changeChance) {
+        // Pick progression based on tension + evolution
+        if (this.evolutionPhase >= 7 && Math.random() < 0.4) {
+          // Late evolution: use exotic progressions
+          const exotic = ['chromatic', 'spacious', 'descending'];
+          const pick = exotic[Math.floor(Math.random() * exotic.length)];
+          this.currentProgressionName = pick;
+          this.currentProgression = CHORD_PROGRESSIONS[pick];
+        } else if (this.tension > 0.6) {
+          this.currentProgressionName = 'tense';
+          this.currentProgression = CHORD_PROGRESSIONS.tense;
+        } else if (this.tension < 0.3 && this.evolutionPhase >= 3) {
+          this.currentProgressionName = 'ethereal';
+          this.currentProgression = CHORD_PROGRESSIONS.ethereal;
+        } else if (this.evolutionPhase >= 5 && Math.random() < 0.3) {
+          this.currentProgressionName = 'descending';
+          this.currentProgression = CHORD_PROGRESSIONS.descending;
+        } else {
+          this.currentProgressionName = 'dark';
+          this.currentProgression = CHORD_PROGRESSIONS.dark;
+        }
+        console.log(`[Audio] Chord progression: ${this.currentProgressionName}`);
       }
+    }
+
+    // At high evolution, sometimes add chromatic passing chords
+    if (this.evolutionPhase >= 6 && Math.random() < 0.2) {
+      // Insert a chromatic approach chord
+      const chromaticShift = Math.random() > 0.5 ? 1 : -1;
+      this.currentProgression[this.chordIndex] = this.currentProgression[this.chordIndex].map(
+        d => d + chromaticShift
+      );
     }
   }
 
@@ -414,52 +604,205 @@ export class AudioEngine {
     }
   }
 
-  // === RHYTHM SYSTEM ===
+  // === TEXTURE SYSTEM ===
 
-  private startRhythm() {
-    // Subtle pulse - not too aggressive
+  private startTextureCycle() {
+    // Change texture every 20-40 seconds
     setInterval(() => {
       if (!this.initialized) return;
-      this.playBeat();
-    }, this.beatInterval);
+      this.cycleTexture();
+    }, 20000 + Math.random() * 20000);
   }
 
-  private playBeat() {
+  private cycleTexture() {
+    this.textureIndex = (this.textureIndex + 1) % this.textureSequence.length;
+    this.currentTexture = this.textureSequence[this.textureIndex];
+    console.log(`[Audio] Texture: ${this.currentTexture}`);
+  }
+
+  // Play a phrase based on current texture mode
+  private playTexturedPhrase(intensity: 'low' | 'medium' | 'high', octave: number = 3) {
+    switch (this.currentTexture) {
+      case 'melody':
+        this.playMelodicLine(intensity, octave);
+        break;
+      case 'chords':
+        this.playChordTexture(intensity, octave);
+        break;
+      case 'arps':
+        this.playArpTexture(intensity, octave);
+        break;
+    }
+  }
+
+  // Single notes with rests - slower, more intentional
+  private playMelodicLine(intensity: 'low' | 'medium' | 'high', octave: number) {
     const now = Tone.now();
-    const beatInBar = (Date.now() / this.beatInterval) % 4;
+    const chord = this.currentProgression[this.chordIndex];
+
+    // Pick notes from current chord + passing tones
+    const noteCount = intensity === 'high' ? 4 : intensity === 'medium' ? 3 : 2;
+    const durations = intensity === 'high'
+      ? ['8n', '8n', '4n', '2n']
+      : intensity === 'medium'
+        ? ['4n', '8n', '2n']
+        : ['2n', '4n'];
+
+    let timeOffset = 0;
+    const velocity = intensity === 'high' ? 0.8 : intensity === 'medium' ? 0.65 : 0.5;
+
+    for (let i = 0; i < noteCount; i++) {
+      // Use chord tones with occasional passing tones
+      const degree = i < chord.length ? chord[i] : chord[0] + (Math.random() > 0.5 ? 2 : -2);
+      const note = this.getNote(degree, octave);
+      const dur = durations[i % durations.length];
+
+      try {
+        // Alternate between lead and bell for variety
+        const synth = i % 2 === 0 ? this.leadSynth : this.bellSynth;
+        synth.triggerAttackRelease(note, dur, now + timeOffset, velocity * (0.8 + Math.random() * 0.2));
+      } catch (e) {}
+
+      timeOffset += Tone.Time(dur).toSeconds();
+
+      // Add rest between notes (melodic breathing)
+      if (Math.random() < 0.4) {
+        timeOffset += Tone.Time('8n').toSeconds();
+      }
+    }
+  }
+
+  // Chord stabs or sustained pads
+  private playChordTexture(intensity: 'low' | 'medium' | 'high', octave: number) {
+    const now = Tone.now();
+    const chord = this.currentProgression[this.chordIndex];
+    const notes = chord.map(d => this.getNote(d, octave));
+
+    const velocity = intensity === 'high' ? 0.75 : intensity === 'medium' ? 0.6 : 0.45;
 
     try {
-      // Kick on 1 and 3 (when activity is high enough)
-      if (this.activity > 0.3 && (Math.floor(beatInBar) === 0 || Math.floor(beatInBar) === 2)) {
-        if (Math.random() < 0.7) {
-          this.kickSynth.triggerAttackRelease('C1', '8n', now);
-        }
+      if (intensity === 'high') {
+        // Rhythmic stab
+        this.padSynth.triggerAttackRelease(notes, '8n', now, velocity);
+        // Echo stab
+        setTimeout(() => {
+          this.padSynth.triggerAttackRelease(notes, '8n', Tone.now(), velocity * 0.6);
+        }, 300);
+      } else if (intensity === 'medium') {
+        // Sustained chord
+        this.padSynth.triggerAttackRelease(notes, '2n', now, velocity);
+      } else {
+        // Soft swell - just root and fifth
+        const thinNotes = [notes[0], notes[2] || notes[1]];
+        this.padSynth.triggerAttackRelease(thinNotes, '1n', now, velocity);
       }
 
-      // Hihat on upbeats (more frequent with activity)
-      if (this.activity > 0.2 && Math.random() < this.activity * 0.5) {
-        this.hihatSynth.triggerAttackRelease('16n', now);
+      // Occasionally add a bell accent on top
+      if (Math.random() < 0.3) {
+        const topNote = this.getNote(chord[chord.length - 1], octave + 1);
+        this.bellSynth.triggerAttackRelease(topNote, '4n', now + 0.1, velocity * 0.5);
       }
+    } catch (e) {}
+  }
 
-      // Snare ghost notes at high tension
-      if (this.tension > 0.5 && Math.random() < 0.15) {
-        this.snareSynth.triggerAttackRelease('32n', now);
-      }
-    } catch (e) {
-      // Ignore
-    }
+  // Arpeggios (existing behavior)
+  private playArpTexture(intensity: 'low' | 'medium' | 'high', octave: number) {
+    const pattern = intensity === 'high'
+      ? this.pickRandomArp()
+      : intensity === 'medium'
+        ? ['rise', 'shimmer', 'cascade'][Math.floor(Math.random() * 3)]
+        : ['pulse', 'stab'][Math.floor(Math.random() * 2)];
+
+    const velocity = intensity === 'high' ? 0.8 : intensity === 'medium' ? 0.65 : 0.5;
+    this.playArpeggio(pattern, this.arpSynth, octave, velocity);
   }
 
   // === MELODIC GENERATION ===
 
-  private playArpeggio(pattern: ArpPattern, synth: Tone.PolySynth, baseOctave: number, velocity: number = 1) {
+  private getArpPattern(baseName: string): ArpPattern {
+    const base = BASE_ARPS[baseName] || BASE_ARPS.rise;
+
+    // At low mutation, return base pattern
+    if (this.arpMutationLevel < 0.1) return base;
+
+    // Mutate the pattern based on evolution level
+    const mutatedDegrees = base.degrees.map((d, i) => {
+      if (Math.random() < this.arpMutationLevel * 0.4) {
+        // Add interval variation
+        const variation = Math.floor((Math.random() - 0.5) * 7 * this.arpMutationLevel);
+        return d + variation;
+      }
+      return d;
+    });
+
+    // At higher evolution, extend the pattern
+    if (this.evolutionPhase >= 4 && Math.random() < 0.3) {
+      const extraNotes = Math.floor(this.evolutionPhase / 2);
+      for (let i = 0; i < extraNotes; i++) {
+        const lastDegree = mutatedDegrees[mutatedDegrees.length - 1];
+        mutatedDegrees.push(lastDegree + (Math.random() > 0.5 ? 2 : -2));
+      }
+    }
+
+    // Octave spread - shift some notes up or down
+    const spreadDegrees = mutatedDegrees.map(d => {
+      if (Math.random() < this.octaveSpread * 0.2) {
+        return d + (Math.random() > 0.5 ? 7 : -7);
+      }
+      return d;
+    });
+
+    // Duration mutation at higher levels
+    const durations = [...base.durations];
+    while (durations.length < spreadDegrees.length) {
+      durations.push(durations[durations.length - 1]);
+    }
+    if (this.polyrhythmLevel > 0.3) {
+      const rhythmOptions = ['32n', '16n', '16n', '8n', '8n', '8n.', '4n', '4n.'];
+      for (let i = 0; i < durations.length; i++) {
+        if (Math.random() < this.polyrhythmLevel * 0.3) {
+          durations[i] = rhythmOptions[Math.floor(Math.random() * rhythmOptions.length)];
+        }
+      }
+    }
+
+    // Velocity humanization
+    const velocities = [...base.velocities];
+    while (velocities.length < spreadDegrees.length) {
+      velocities.push(velocities[velocities.length - 1]);
+    }
+    const humanizedVelocities = velocities.map(v =>
+      Math.max(0.3, Math.min(1, v + (Math.random() - 0.5) * 0.3))
+    );
+
+    return { degrees: spreadDegrees, durations, velocities: humanizedVelocities };
+  }
+
+  private pickRandomArp(): string {
+    // Higher evolution = more exotic patterns
+    const available = this.evolutionPhase < 3
+      ? ['rise', 'fall', 'pulse', 'cascade', 'shimmer', 'stab']
+      : ARP_NAMES;
+    return available[Math.floor(Math.random() * available.length)];
+  }
+
+  private playArpeggio(patternName: string | ArpPattern, synth: Tone.PolySynth, baseOctave: number, velocity: number = 1) {
+    const pattern = typeof patternName === 'string'
+      ? this.getArpPattern(patternName)
+      : patternName;
+
     const now = Tone.now();
+
+    // Add octave variation based on evolution
+    const octaveOffset = this.octaveSpread > 0.5
+      ? Math.floor((Math.random() - 0.5) * this.octaveSpread)
+      : 0;
 
     let timeOffset = 0;
     for (let i = 0; i < pattern.degrees.length; i++) {
-      const note = this.getNote(pattern.degrees[i], baseOctave);
-      const dur = pattern.durations[i];
-      const vel = pattern.velocities[i] * velocity;
+      const note = this.getNote(pattern.degrees[i], baseOctave + octaveOffset);
+      const dur = pattern.durations[i % pattern.durations.length];
+      const vel = (pattern.velocities[i % pattern.velocities.length] || 0.7) * velocity;
 
       try {
         synth.triggerAttackRelease(note, dur, now + timeOffset, vel);
@@ -468,6 +811,28 @@ export class AudioEngine {
       }
 
       // Calculate time offset from duration
+      timeOffset += Tone.Time(dur).toSeconds();
+    }
+
+    // At high evolution, sometimes layer a second pattern (less frequently)
+    if (this.evolutionPhase >= 7 && Math.random() < 0.12 && this.activity < 0.6) {
+      setTimeout(() => {
+        const secondPattern = this.getArpPattern(this.pickRandomArp());
+        this.playArpeggioRaw(secondPattern, this.bellSynth, baseOctave + 1, velocity * 0.4);
+      }, 300);
+    }
+  }
+
+  private playArpeggioRaw(pattern: ArpPattern, synth: Tone.PolySynth, baseOctave: number, velocity: number) {
+    const now = Tone.now();
+    let timeOffset = 0;
+    for (let i = 0; i < pattern.degrees.length; i++) {
+      const note = this.getNote(pattern.degrees[i], baseOctave);
+      const dur = pattern.durations[i % pattern.durations.length];
+      const vel = (pattern.velocities[i % pattern.velocities.length] || 0.7) * velocity;
+      try {
+        synth.triggerAttackRelease(note, dur, now + timeOffset, vel);
+      } catch (e) {}
       timeOffset += Tone.Time(dur).toSeconds();
     }
   }
@@ -531,13 +896,13 @@ export class AudioEngine {
 
   playMalwareUrl(hit: URLhausHit) {
     if (!this.initialized) return;
-    if (!this.throttle('malware', 150)) return;
+    if (!this.throttle('malware', 200)) return;
 
     this.addTension(0.08);
     this.addActivity(0.1);
 
-    // Malware: descending arpeggio (falling/corrupting)
-    this.playArpeggio(ARPS.fall, this.arpSynth, 4, 0.7);
+    // Use current texture mode
+    this.playTexturedPhrase('medium', 4);
 
     // Pluck accent
     const h = hash(hit.url || 'malware');
@@ -551,13 +916,8 @@ export class AudioEngine {
     this.addTension(0.04);
     this.addActivity(0.08);
 
-    // Honeypot: quick stab pattern
-    this.playArpeggio(ARPS.stab, this.arpSynth, 3, 0.6);
-
-    // Occasional kick for aggressive attacks
-    if (attack.attackType?.includes('brute') && Math.random() < 0.5) {
-      this.kickSynth.triggerAttackRelease('C1', '16n', Tone.now());
-    }
+    // Use current texture mode - low intensity for frequent events
+    this.playTexturedPhrase('low', 3);
   }
 
   playBotnetC2(c2: FeodoC2) {
@@ -567,8 +927,8 @@ export class AudioEngine {
     this.addTension(0.12);
     this.addActivity(0.12);
 
-    // C2: pulsing pattern (command/control rhythm)
-    this.playArpeggio(ARPS.pulse, this.arpSynth, 2, 0.8);
+    // Use current texture mode - medium intensity
+    this.playTexturedPhrase('medium', 2);
 
     // Low lead note for command
     const note = this.getNote(0, 2);
@@ -588,13 +948,12 @@ export class AudioEngine {
     this.addTension(0.25);
     this.addActivity(0.2);
 
-    // Ransomware: dramatic - falling arp then low impact
-    this.playArpeggio(ARPS.cascade, this.leadSynth, 4, 1.0);
+    // Ransomware: always dramatic - high intensity
+    this.playTexturedPhrase('high', 4);
 
     // Heavy bass drop
     setTimeout(() => {
       this.bassSynth.triggerAttackRelease(this.getNote(0, 0), '2n', Tone.now());
-      this.kickSynth.triggerAttackRelease('C0', '4n', Tone.now());
     }, 300);
 
     // Dissonant chord
@@ -615,14 +974,14 @@ export class AudioEngine {
     this.addTension(0.03);
     this.addActivity(0.06);
 
-    // Phishing: deceptively pleasant bell
-    const h = hash(phish.domain || 'phish');
-    this.playBell(h % 7, 4);
+    // Phishing: use current texture - low intensity
+    this.playTexturedPhrase('low', 4);
 
-    // Slightly off arp
+    // Slightly off bell for targeted brands
     if (phish.targetBrand) {
+      const h = hash(phish.domain || 'phish');
       setTimeout(() => {
-        this.playBell((h + 1) % 7, 4); // Dissonant echo
+        this.playBell((h + 1) % 7, 4);
       }, 200);
     }
   }
@@ -634,8 +993,8 @@ export class AudioEngine {
     this.addTension(0.05);
     this.addActivity(0.05);
 
-    // Cert: shimmer pattern (cryptographic)
-    this.playArpeggio(ARPS.shimmer, this.bellSynth, 4, 0.5);
+    // Cert: use current texture - low intensity
+    this.playTexturedPhrase('low', 4);
   }
 
   playBruteforce(attack: BruteforceAttack) {
@@ -645,28 +1004,17 @@ export class AudioEngine {
     this.addTension(0.06);
     this.addActivity(0.1);
 
-    // Brute force: repetitive stabs
-    const now = Tone.now();
-    this.arpSynth.triggerAttackRelease(this.getNote(0, 3), '16n', now, 0.8);
-    this.arpSynth.triggerAttackRelease(this.getNote(0, 3), '16n', now + 0.1, 0.6);
-
-    // Kick for emphasis
-    if (Math.random() < 0.4) {
-      this.kickSynth.triggerAttackRelease('C1', '16n', now + 0.05);
-    }
+    // Brute force: use current texture - low intensity
+    this.playTexturedPhrase('low', 3);
   }
 
   playTorNode(node: TorExitNode) {
     if (!this.initialized) return;
     if (!this.throttle('tor', 200)) return;
 
-    // Tor: ethereal, mysterious
+    // Tor: ethereal, mysterious - use current texture
     this.addActivity(0.03);
-
-    // Long, slow notes
-    const h = hash(node.fingerprint || 'tor');
-    const note = this.getNote(h % 5, 4);
-    this.bellSynth.triggerAttackRelease(note, '2n', Tone.now(), 0.4);
+    this.playTexturedPhrase('low', 4);
 
     // Drone layer
     if (Math.random() < 0.3) {
@@ -681,8 +1029,8 @@ export class AudioEngine {
     const scanLevel = Math.min((data.scannerCount || 50) / 200, 1);
     this.activity = this.activity * 0.9 + scanLevel * 0.1;
 
-    // Noise floor volume
-    this.noiseGain.gain.rampTo(0.01 + scanLevel * 0.03, 1);
+    // Noise floor volume - increases with evolution
+    this.noiseGain.gain.rampTo(0.01 + scanLevel * 0.03 + this.evolutionPhase * 0.003, 1);
   }
 
   playBreach(breach: HIBPBreach) {
@@ -692,21 +1040,15 @@ export class AudioEngine {
     this.addTension(0.2);
     this.addActivity(0.15);
 
-    // Breach: cascading fall (data spilling)
-    this.playArpeggio(ARPS.fall, this.leadSynth, 5, 0.9);
+    // Breach: high intensity texture
+    this.playTexturedPhrase('high', 5);
 
     // Low rumble
     this.bassSynth.triggerAttackRelease(this.getNote(0, 0), '1n', Tone.now());
 
-    // Cascade echo
-    setTimeout(() => {
-      this.playArpeggio(ARPS.fall, this.arpSynth, 4, 0.5);
-    }, 400);
-
-    // Major breach: extra impact
+    // Major breach: extra chord impact
     if (breach.pwnCount > 1000000) {
       setTimeout(() => {
-        this.kickSynth.triggerAttackRelease('C0', '2n', Tone.now());
         this.padSynth.triggerAttackRelease([
           this.getNote(0, 1),
           this.getNote(3, 1),
@@ -723,37 +1065,25 @@ export class AudioEngine {
     this.addTension(0.08);
     this.addActivity(0.08);
 
-    // IP hijack: mechanical pulse
-    this.playArpeggio(ARPS.pulse, this.arpSynth, 2, 0.7);
-
-    // Static-like snare
-    this.snareSynth.triggerAttackRelease('16n', Tone.now());
+    // IP hijack: medium intensity texture
+    this.playTexturedPhrase('medium', 2);
   }
 
   playBGPEvent(event: BGPEvent) {
     if (!this.initialized) return;
     if (!this.throttle('bgp', 400)) return;
 
-    const tensionMap = { critical: 0.15, high: 0.1, medium: 0.05, low: 0.02 };
+    const tensionMap: Record<string, number> = { critical: 0.15, high: 0.1, medium: 0.05, low: 0.02 };
     this.addTension(tensionMap[event.severity] || 0.05);
     this.addActivity(0.1);
 
+    // BGP events use intensity based on type
     if (event.eventType === 'hijack') {
-      // BGP hijack: alarming rise
-      this.playArpeggio(ARPS.rise, this.leadSynth, 3, 0.9);
-
-      // Metallic alarm
-      this.hihatSynth.triggerAttackRelease('8n', Tone.now());
-      this.hihatSynth.triggerAttackRelease('8n', Tone.now() + 0.1);
-      this.hihatSynth.triggerAttackRelease('8n', Tone.now() + 0.2);
-
+      this.playTexturedPhrase('high', 3);
     } else if (event.eventType === 'leak') {
-      // Leak: unstable shimmer
-      this.playArpeggio(ARPS.shimmer, this.arpSynth, 4, 0.6);
-
+      this.playTexturedPhrase('medium', 4);
     } else {
-      // Other: simple pulse
-      this.playArpeggio(ARPS.stab, this.arpSynth, 3, 0.5);
+      this.playTexturedPhrase('low', 3);
     }
   }
 
@@ -815,9 +1145,6 @@ export class AudioEngine {
     this.arpSynth.dispose();
     this.bellSynth.dispose();
     this.pluckSynth.dispose();
-    this.kickSynth.dispose();
-    this.hihatSynth.dispose();
-    this.snareSynth.dispose();
     this.droneSynth.dispose();
     this.noiseSynth.dispose();
     this.noiseGain.dispose();
