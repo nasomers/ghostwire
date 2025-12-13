@@ -170,7 +170,8 @@ export class AudioEngine {
     this.distortion = new Tone.Distortion(0.05); // Gentler distortion
     this.chebyshev = new Tone.Chebyshev(2);
     this.feedbackDelay = new Tone.FeedbackDelay({
-      delayTime: '8n.',
+      delayTime: 0.3,
+      maxDelay: 2,
       feedback: 0.3,
       wet: 0.2,
     });
