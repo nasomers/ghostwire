@@ -21,7 +21,10 @@ import type {
 // Dark scales - emphasizing tension and unease
 const SCALES = {
   phrygian: [0, 1, 3, 5, 7, 8, 10],      // Spanish/dark
+  minor: [0, 2, 3, 5, 7, 8, 10],          // Natural minor
+  dorian: [0, 2, 3, 5, 7, 9, 10],         // Jazz-inflected dark
   locrian: [0, 1, 3, 5, 6, 8, 10],        // Most unstable
+  harmonicMinor: [0, 2, 3, 5, 7, 8, 11],  // Exotic tension
   superLocrian: [0, 1, 3, 4, 6, 8, 10],   // Altered scale - maximum tension
   wholeTone: [0, 2, 4, 6, 8, 10],         // Dreamlike, unsettling
   diminished: [0, 2, 3, 5, 6, 8, 9, 11],  // Symmetric, ominous
@@ -1737,9 +1740,10 @@ export class AudioEngine {
   }
 
   // === BGP Event - Route Hijack/Leak ===
+  private lastBgpStingerTime = 0;
   playBGPEvent(bgpEvent: BGPEvent) {
     if (!this.initialized) return;
-    if (!this.throttleEvent('bgp', 150)) return;
+    if (!this.throttleEvent('bgp', 500)) return; // Increased from 150ms - BGP is very noisy
     try {
       const now = Tone.now() + 0.02;
       const params = hashToParams(bgpEvent.prefix);
@@ -1750,8 +1754,10 @@ export class AudioEngine {
 
       if (bgpEvent.eventType === 'hijack') {
         // Hijack - aggressive, alarming
-        // Play stinger for critical/high severity hijacks
-        if (bgpEvent.severity === 'critical' || bgpEvent.severity === 'high') {
+        // Play stinger for critical severity hijacks only, max once per 5 seconds
+        const stingerNow = Tone.now();
+        if (bgpEvent.severity === 'critical' && stingerNow - this.lastBgpStingerTime > 5) {
+          this.lastBgpStingerTime = stingerNow;
           this.playStinger('bgpHijack');
         }
 
