@@ -608,6 +608,66 @@ export class VisualEngine {
   private trailHistory: Map<string, THREE.Vector3[]> = new Map();
   private trailLength = 8;
 
+  // Wandering camera system
+  private cameraTarget = new THREE.Vector3(0, 0, 0); // Where camera looks
+  private cameraFocusTarget = new THREE.Vector3(0, 0, 0); // Smoothed target
+  private cameraOrbitAngle = 0; // Current orbit angle
+  private cameraOrbitSpeed = 0.02; // Radians per second
+  private activityCenter = new THREE.Vector3(0, 0, 0); // Weighted center of recent activity
+  private cameraMode: 'orbit' | 'focus' | 'zoom' = 'orbit'; // Current camera behavior
+  private cameraModeTimer = 0; // Time in current mode
+  private zoomTarget: ThreatNode | null = null; // Node to zoom into
+
+  // Mood phases system - evolving visual atmosphere
+  private moodPhase: 'emergence' | 'pulse' | 'drift' | 'intensity' | 'void' = 'emergence';
+  private moodTimer = 0;
+  private moodDuration = 600; // 10 minutes per phase
+  private moodTransition = 0; // 0-1 blend between moods
+  private moodTransitionSpeed = 0.002; // How fast to transition
+
+  // Mood-specific modifiers
+  private moodModifiers = {
+    particleSpeed: 1,
+    particleSize: 1,
+    bloomStrength: 1,
+    colorTemperature: 0, // -1 cool to +1 warm
+    fogDensity: 1,
+    glitchProbability: 1,
+  };
+
+  // Tension memory - scars left by tension spikes
+  private tensionScars: Array<{
+    x: number;
+    y: number;
+    intensity: number;
+    life: number;
+    maxLife: number;
+    color: THREE.Color;
+    radius: number;
+  }> = [];
+  private lastTensionPeak = 0;
+  private tensionScarThreshold = 0.6; // Tension level that triggers scars
+
+  // Activity ghosts - echoes during quiet periods
+  private activityGhosts: Array<{
+    position: THREE.Vector3;
+    type: string;
+    color: THREE.Color;
+    life: number;
+    maxLife: number;
+    opacity: number;
+    pulsePhase: number;
+  }> = [];
+  private quietTimer = 0; // How long it's been quiet
+  private quietThreshold = 5; // Seconds of quiet before spawning ghosts
+  private lastNodePositions: Array<{
+    position: THREE.Vector3;
+    type: string;
+    color: THREE.Color;
+    timestamp: number;
+  }> = [];
+  private maxGhostMemory = 50; // How many positions to remember
+
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
@@ -1653,14 +1713,329 @@ export class VisualEngine {
       }
     }
 
+    this.updateMood(deltaTime);
     this.updateNodes(deltaTime);
     this.updateTopology();
     this.updateRegionGlows(deltaTime);
     this.updateStreams(deltaTime);
     this.updateGlitches(deltaTime);
     this.updateAmbientTension();
+    this.updateTensionMemory(deltaTime);
+    this.updateActivityGhosts(deltaTime);
     this.updateCamera();
     this.updateUniforms();
+  }
+
+  private updateTensionMemory(deltaTime: number) {
+    // Check for tension spike - leave a scar when tension exceeds threshold
+    if (this.tension > this.tensionScarThreshold && this.tension > this.lastTensionPeak + 0.1) {
+      // Create scar at activity center
+      const screenPos = this.activityCenter.clone().project(this.camera);
+      const x = (screenPos.x * 0.5 + 0.5);
+      const y = (-screenPos.y * 0.5 + 0.5);
+
+      // Only add if on screen
+      if (x > 0 && x < 1 && y > 0 && y < 1) {
+        // Pick color from active threats
+        let scarColor = new THREE.Color(ACCENT.malware);
+        const activeTypes = Array.from(this.nodes.values())
+          .filter(n => n.life < n.maxLife * 0.3) // Recent nodes
+          .map(n => n.type);
+        if (activeTypes.length > 0) {
+          const dominantType = activeTypes[Math.floor(Math.random() * activeTypes.length)];
+          scarColor = this.getColorForType(dominantType);
+        }
+
+        this.tensionScars.push({
+          x,
+          y,
+          intensity: this.tension,
+          life: 0,
+          maxLife: 30 + this.tension * 60, // High tension = longer scar
+          color: scarColor,
+          radius: 50 + this.tension * 100,
+        });
+
+        // Limit number of scars
+        if (this.tensionScars.length > 10) {
+          this.tensionScars.shift();
+        }
+      }
+    }
+    this.lastTensionPeak = this.tension;
+
+    // Update existing scars
+    for (let i = this.tensionScars.length - 1; i >= 0; i--) {
+      const scar = this.tensionScars[i];
+      scar.life += deltaTime;
+
+      if (scar.life >= scar.maxLife) {
+        this.tensionScars.splice(i, 1);
+      }
+    }
+  }
+
+  private updateActivityGhosts(deltaTime: number) {
+    // Record positions of current nodes for ghost memory
+    this.nodes.forEach(node => {
+      if (node.life < 2) { // Only record recent nodes
+        this.lastNodePositions.push({
+          position: node.position.clone(),
+          type: node.type,
+          color: node.color.clone(),
+          timestamp: Date.now(),
+        });
+
+        // Limit memory size
+        if (this.lastNodePositions.length > this.maxGhostMemory) {
+          this.lastNodePositions.shift();
+        }
+      }
+    });
+
+    // Check if it's been quiet (low activity)
+    const recentNodeCount = Array.from(this.nodes.values())
+      .filter(n => n.life < n.maxLife * 0.5).length;
+
+    if (recentNodeCount < 5 && this.tension < 0.2) {
+      this.quietTimer += deltaTime;
+
+      // Spawn ghosts during quiet periods
+      if (this.quietTimer > this.quietThreshold &&
+          this.lastNodePositions.length > 0 &&
+          this.activityGhosts.length < 15) {
+        // Randomly spawn ghost from memory
+        if (Math.random() < 0.1) {
+          const memory = this.lastNodePositions[
+            Math.floor(Math.random() * this.lastNodePositions.length)
+          ];
+
+          this.activityGhosts.push({
+            position: memory.position.clone().add(
+              new THREE.Vector3(
+                (Math.random() - 0.5) * 10,
+                (Math.random() - 0.5) * 10,
+                (Math.random() - 0.5) * 5
+              )
+            ),
+            type: memory.type,
+            color: memory.color.clone().multiplyScalar(0.3), // Dimmer
+            life: 0,
+            maxLife: 8 + Math.random() * 12,
+            opacity: 0.15 + Math.random() * 0.15,
+            pulsePhase: Math.random() * Math.PI * 2,
+          });
+        }
+      }
+    } else {
+      this.quietTimer = 0;
+    }
+
+    // Update existing ghosts
+    for (let i = this.activityGhosts.length - 1; i >= 0; i--) {
+      const ghost = this.activityGhosts[i];
+      ghost.life += deltaTime;
+
+      // Ghosts drift slowly
+      ghost.position.x += Math.sin(this.time + ghost.pulsePhase) * deltaTime * 0.5;
+      ghost.position.y += Math.cos(this.time * 0.7 + ghost.pulsePhase) * deltaTime * 0.3;
+
+      // Fade out if activity resumes or lifetime ends
+      if (ghost.life >= ghost.maxLife || this.tension > 0.3) {
+        this.activityGhosts.splice(i, 1);
+      }
+    }
+  }
+
+  private updateMood(deltaTime: number) {
+    this.moodTimer += deltaTime;
+
+    // Transition smoothly between moods
+    if (this.moodTransition < 1) {
+      this.moodTransition = Math.min(1, this.moodTransition + this.moodTransitionSpeed);
+    }
+
+    // Check for mood phase change
+    if (this.moodTimer >= this.moodDuration) {
+      this.moodTimer = 0;
+      this.moodTransition = 0; // Start transitioning to new mood
+
+      // Cycle to next mood phase
+      const phases: typeof this.moodPhase[] = ['emergence', 'pulse', 'drift', 'intensity', 'void'];
+      const currentIndex = phases.indexOf(this.moodPhase);
+      const nextIndex = (currentIndex + 1) % phases.length;
+      this.moodPhase = phases[nextIndex];
+
+      console.log(`[Visuals] Mood phase: ${this.moodPhase}`);
+    }
+
+    // Calculate mood modifiers based on current phase
+    const targetModifiers = this.getMoodTargetModifiers();
+
+    // Smoothly interpolate modifiers
+    const lerpSpeed = 0.01;
+    this.moodModifiers.particleSpeed += (targetModifiers.particleSpeed - this.moodModifiers.particleSpeed) * lerpSpeed;
+    this.moodModifiers.particleSize += (targetModifiers.particleSize - this.moodModifiers.particleSize) * lerpSpeed;
+    this.moodModifiers.bloomStrength += (targetModifiers.bloomStrength - this.moodModifiers.bloomStrength) * lerpSpeed;
+    this.moodModifiers.colorTemperature += (targetModifiers.colorTemperature - this.moodModifiers.colorTemperature) * lerpSpeed;
+    this.moodModifiers.fogDensity += (targetModifiers.fogDensity - this.moodModifiers.fogDensity) * lerpSpeed;
+    this.moodModifiers.glitchProbability += (targetModifiers.glitchProbability - this.moodModifiers.glitchProbability) * lerpSpeed;
+
+    // Apply mood-based color temperature to scene
+    this.applyMoodEffects();
+  }
+
+  private getMoodTargetModifiers(): typeof this.moodModifiers {
+    switch (this.moodPhase) {
+      case 'emergence':
+        // Birth and growth - particles emerge slowly, warm colors
+        return {
+          particleSpeed: 0.7,
+          particleSize: 1.2,
+          bloomStrength: 1.3,
+          colorTemperature: 0.2, // Slightly warm
+          fogDensity: 0.8,
+          glitchProbability: 0.5,
+        };
+
+      case 'pulse':
+        // Rhythmic activity - faster, pulsing, neutral temperature
+        return {
+          particleSpeed: 1.3,
+          particleSize: 1.0,
+          bloomStrength: 1.5,
+          colorTemperature: 0,
+          fogDensity: 1.0,
+          glitchProbability: 1.2,
+        };
+
+      case 'drift':
+        // Contemplative - slow, spread out, cooler colors
+        return {
+          particleSpeed: 0.5,
+          particleSize: 0.9,
+          bloomStrength: 0.8,
+          colorTemperature: -0.3, // Cool
+          fogDensity: 1.3,
+          glitchProbability: 0.3,
+        };
+
+      case 'intensity':
+        // High alert - fast, concentrated, warm/red shift
+        return {
+          particleSpeed: 1.6,
+          particleSize: 1.1,
+          bloomStrength: 1.8,
+          colorTemperature: 0.5, // Warm/red
+          fogDensity: 0.7,
+          glitchProbability: 2.0,
+        };
+
+      case 'void':
+        // Emptiness - minimal, sparse, very cool
+        return {
+          particleSpeed: 0.4,
+          particleSize: 0.7,
+          bloomStrength: 0.5,
+          colorTemperature: -0.5, // Very cool
+          fogDensity: 1.5,
+          glitchProbability: 0.2,
+        };
+
+      default:
+        return this.moodModifiers;
+    }
+  }
+
+  private applyClusteringForce(node: ThreatNode, deltaTime: number) {
+    // Attract nodes with shared properties toward each other
+    const clusterStrength = 0.15;
+    const maxDistance = 50; // Only cluster with nearby nodes
+    const minDistance = 5;  // Don't get too close
+
+    const force = new THREE.Vector3(0, 0, 0);
+    let attractorCount = 0;
+
+    this.nodes.forEach((other, otherId) => {
+      if (other === node) return;
+
+      const distance = node.position.distanceTo(other.position);
+      if (distance > maxDistance || distance < 0.1) return;
+
+      // Calculate similarity score
+      let similarity = 0;
+
+      // Same threat type - strong attraction
+      if (node.type === other.type) {
+        similarity += 0.5;
+      }
+
+      // Same country - moderate attraction
+      if (node.country && node.country === other.country) {
+        similarity += 0.3;
+      }
+
+      // Same source IP/domain - strong attraction
+      if (node.meta && other.meta) {
+        if (node.meta.ip && node.meta.ip === other.meta.ip) {
+          similarity += 0.7;
+        }
+        if (node.meta.domain && node.meta.domain === other.meta.domain) {
+          similarity += 0.5;
+        }
+        // Same malware family
+        if (node.meta.malware && node.meta.malware === other.meta.malware) {
+          similarity += 0.6;
+        }
+      }
+
+      if (similarity < 0.3) return; // Not similar enough
+
+      // Calculate attraction force
+      const direction = other.position.clone().sub(node.position).normalize();
+
+      // Stronger attraction when far, weaker when close (spring-like)
+      let strength = similarity * clusterStrength;
+      if (distance < minDistance) {
+        // Repel if too close
+        strength = -0.1 * (minDistance - distance) / minDistance;
+      } else {
+        // Attract based on distance
+        strength *= (distance - minDistance) / (maxDistance - minDistance);
+      }
+
+      force.add(direction.multiplyScalar(strength));
+      attractorCount++;
+    });
+
+    // Apply force as velocity change
+    if (attractorCount > 0) {
+      force.divideScalar(Math.sqrt(attractorCount)); // Normalize by sqrt to prevent excessive clustering
+      node.velocity.add(force.multiplyScalar(deltaTime * 30));
+    }
+  }
+
+  private applyMoodEffects() {
+    // Apply color temperature to fog - shift between cool blue and warm red
+    const baseColor = new THREE.Color(VOID_COLOR);
+    const temp = this.moodModifiers.colorTemperature;
+
+    if (temp > 0) {
+      // Warm shift - add red/orange
+      baseColor.r = Math.min(1, baseColor.r + temp * 0.03);
+      baseColor.g = Math.max(0, baseColor.g - temp * 0.01);
+    } else {
+      // Cool shift - add blue
+      baseColor.b = Math.min(1, baseColor.b - temp * 0.03);
+      baseColor.r = Math.max(0, baseColor.r + temp * 0.01);
+    }
+
+    (this.scene.fog as THREE.FogExp2).color.copy(baseColor);
+
+    // Apply bloom strength if we have bloom pass
+    if (this.bloomPass) {
+      this.bloomPass.strength = 0.4 * this.moodModifiers.bloomStrength;
+    }
   }
 
   // Spawn glitch text overlay
@@ -1715,8 +2090,12 @@ export class VisualEngine {
         return;
       }
 
-      // Movement
-      node.position.add(node.velocity.clone().multiplyScalar(deltaTime * 60));
+      // Apply clustering forces - attract to similar nodes
+      this.applyClusteringForce(node, deltaTime);
+
+      // Movement - modified by mood phase
+      const speedMod = this.moodModifiers.particleSpeed;
+      node.position.add(node.velocity.clone().multiplyScalar(deltaTime * 60 * speedMod));
       node.velocity.multiplyScalar(0.995);
 
       // Record trail history for afterglow
@@ -1768,9 +2147,10 @@ export class VisualEngine {
           sizeMultiplier = 1 - ((lifeRatio - 0.8) / 0.2) * 0.8;
         }
 
-        // Larger size for highlighted/selected nodes
+        // Larger size for highlighted/selected nodes, modified by mood
         const sizeBoost = isSelected ? 1.8 : (isHighlighted ? 1.4 : 1);
-        sizes[idx] = node.size * (0.5 + alpha * 0.5) * sizeBoost * sizeMultiplier;
+        const moodSizeMod = this.moodModifiers.particleSize;
+        sizes[idx] = node.size * (0.5 + alpha * 0.5) * sizeBoost * sizeMultiplier * moodSizeMod;
         alphas[idx] = alpha;
 
         // Track node ID at this geometry index for raycasting
@@ -2090,6 +2470,70 @@ export class VisualEngine {
 
       ctx.shadowBlur = 0;
     }
+
+    // Render tension scars (afterimages from tension spikes)
+    for (const scar of this.tensionScars) {
+      const progress = scar.life / scar.maxLife;
+      const fadeAlpha = Math.max(0, 1 - progress * progress); // Quadratic fade
+      const pulse = 0.5 + Math.sin(this.time * 2 + scar.x * 10) * 0.2;
+
+      const r = Math.floor(scar.color.r * 255);
+      const g = Math.floor(scar.color.g * 255);
+      const b = Math.floor(scar.color.b * 255);
+
+      // Draw radial gradient scar
+      const gradient = ctx.createRadialGradient(
+        scar.x * w, scar.y * h, 0,
+        scar.x * w, scar.y * h, scar.radius * (1 - progress * 0.5)
+      );
+
+      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${fadeAlpha * 0.3 * pulse})`);
+      gradient.addColorStop(0.3, `rgba(${r}, ${g}, ${b}, ${fadeAlpha * 0.15 * pulse})`);
+      gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(scar.x * w, scar.y * h, scar.radius, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Add subtle ring
+      ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${fadeAlpha * 0.1})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(scar.x * w, scar.y * h, scar.radius * 0.7 * (1 + Math.sin(this.time * 3) * 0.1), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Render activity ghosts
+    for (const ghost of this.activityGhosts) {
+      const screen = toScreen(ghost.position);
+      if (!screen) continue;
+
+      const progress = ghost.life / ghost.maxLife;
+      const fadeAlpha = Math.sin(progress * Math.PI) * ghost.opacity; // Fade in and out
+      const pulse = 0.7 + Math.sin(this.time * 3 + ghost.pulsePhase) * 0.3;
+
+      const r = Math.floor(ghost.color.r * 255);
+      const g = Math.floor(ghost.color.g * 255);
+      const b = Math.floor(ghost.color.b * 255);
+
+      // Draw ghostly particle
+      const ghostRadius = 15 + Math.sin(this.time * 2 + ghost.pulsePhase) * 5;
+
+      const gradient = ctx.createRadialGradient(
+        screen.x, screen.y, 0,
+        screen.x, screen.y, ghostRadius
+      );
+
+      gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${fadeAlpha * pulse})`);
+      gradient.addColorStop(0.5, `rgba(${r}, ${g}, ${b}, ${fadeAlpha * 0.3})`);
+      gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(screen.x, screen.y, ghostRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   private updateGlitches(deltaTime: number) {
@@ -2142,31 +2586,173 @@ export class VisualEngine {
   }
 
   private updateCamera() {
-    const t = this.time * 0.1;
+    const deltaTime = 1 / 60; // Approximate frame time
+    this.cameraModeTimer += deltaTime;
 
-    // Base camera movement
-    let camX = Math.sin(t * 0.7) * 8;
-    let camY = Math.cos(t * 0.5) * 5;
-    let camZ = 100 + Math.sin(t * 0.3) * 6 - this.tension * 10;
+    // Calculate activity center from recent nodes (weighted by recency and intensity)
+    this.updateActivityCenter();
+
+    // Camera mode state machine
+    this.updateCameraMode();
+
+    // Calculate camera position based on mode
+    let targetPos = new THREE.Vector3();
+    let targetLookAt = new THREE.Vector3();
+
+    switch (this.cameraMode) {
+      case 'orbit':
+        // Slow orbit around the activity center
+        this.cameraOrbitAngle += this.cameraOrbitSpeed * deltaTime;
+        const orbitRadius = 95 + Math.sin(this.time * 0.1) * 10;
+        const orbitHeight = Math.sin(this.time * 0.07) * 15;
+
+        targetPos.set(
+          Math.cos(this.cameraOrbitAngle) * orbitRadius + this.activityCenter.x * 0.3,
+          orbitHeight + this.activityCenter.y * 0.3,
+          Math.sin(this.cameraOrbitAngle) * orbitRadius * 0.3 + 80
+        );
+        targetLookAt.copy(this.activityCenter).multiplyScalar(0.5);
+        break;
+
+      case 'focus':
+        // Drift toward activity center, closer inspection
+        const focusDistance = 70 - this.tension * 15;
+        targetPos.set(
+          this.activityCenter.x * 0.6 + Math.sin(this.time * 0.3) * 10,
+          this.activityCenter.y * 0.6 + Math.cos(this.time * 0.2) * 8,
+          focusDistance
+        );
+        targetLookAt.copy(this.activityCenter).multiplyScalar(0.7);
+        break;
+
+      case 'zoom':
+        // Zoom into a specific node
+        if (this.zoomTarget) {
+          const zoomDistance = 30 + Math.sin(this.time * 0.5) * 5;
+          targetPos.set(
+            this.zoomTarget.position.x + 15,
+            this.zoomTarget.position.y + 10,
+            this.zoomTarget.position.z + zoomDistance
+          );
+          targetLookAt.copy(this.zoomTarget.position);
+        } else {
+          // Fallback to orbit if no target
+          this.cameraMode = 'orbit';
+        }
+        break;
+    }
+
+    // Smooth interpolation to target position
+    const lerpSpeed = this.cameraMode === 'zoom' ? 0.03 : 0.015;
+    this.camera.position.lerp(targetPos, lerpSpeed);
+    this.cameraFocusTarget.lerp(targetLookAt, lerpSpeed * 0.8);
 
     // Tension-based camera shake
     if (this.tension > 0.3) {
-      const shakeIntensity = (this.tension - 0.3) * 3; // 0 to ~2.1
-      const shakeFreq = this.time * 30;
-      camX += Math.sin(shakeFreq) * shakeIntensity * 0.5;
-      camY += Math.cos(shakeFreq * 1.3) * shakeIntensity * 0.3;
-      camZ += Math.sin(shakeFreq * 0.7) * shakeIntensity * 0.2;
+      const shakeIntensity = (this.tension - 0.3) * 2;
+      const shakeFreq = this.time * 25;
+      this.camera.position.x += Math.sin(shakeFreq) * shakeIntensity * 0.4;
+      this.camera.position.y += Math.cos(shakeFreq * 1.3) * shakeIntensity * 0.3;
     }
 
-    this.camera.position.x = camX;
-    this.camera.position.y = camY;
-    this.camera.position.z = camZ;
-    this.camera.lookAt(0, 0, 0);
+    this.camera.lookAt(this.cameraFocusTarget);
 
-    // Tension-based fog density (thicker fog = more ominous)
+    // Tension and mood-based fog density
     const baseFogDensity = 0.006;
     const tensionFogBoost = this.tension * 0.003;
-    (this.scene.fog as THREE.FogExp2).density = baseFogDensity + tensionFogBoost;
+    const moodFogMod = this.moodModifiers.fogDensity;
+    (this.scene.fog as THREE.FogExp2).density = (baseFogDensity + tensionFogBoost) * moodFogMod;
+  }
+
+  private updateActivityCenter() {
+    // Calculate weighted center of activity from recent nodes
+    let weightSum = 0;
+    const center = new THREE.Vector3(0, 0, 0);
+
+    this.nodes.forEach(node => {
+      // Weight by recency (newer = higher weight) and intensity
+      const age = node.life / node.maxLife;
+      const recencyWeight = Math.max(0, 1 - age * age); // Quadratic falloff
+      const weight = recencyWeight * node.intensity;
+
+      center.add(node.position.clone().multiplyScalar(weight));
+      weightSum += weight;
+    });
+
+    if (weightSum > 0) {
+      center.divideScalar(weightSum);
+      // Smooth interpolation to new activity center
+      this.activityCenter.lerp(center, 0.02);
+    } else {
+      // Drift back to origin when no activity
+      this.activityCenter.lerp(new THREE.Vector3(0, 0, 0), 0.01);
+    }
+  }
+
+  private updateCameraMode() {
+    // Mode transition logic
+    const modeDurations = {
+      orbit: 45 + Math.random() * 30,    // 45-75 seconds orbiting
+      focus: 20 + Math.random() * 15,    // 20-35 seconds focused
+      zoom: 8 + Math.random() * 7        // 8-15 seconds zoomed
+    };
+
+    if (this.cameraModeTimer > modeDurations[this.cameraMode]) {
+      this.cameraModeTimer = 0;
+
+      // Choose next mode based on current state
+      if (this.cameraMode === 'orbit') {
+        // From orbit, either focus on activity or zoom to a node
+        if (this.nodes.size > 5 && Math.random() < 0.4) {
+          // 40% chance to zoom to an interesting node
+          this.cameraMode = 'zoom';
+          this.zoomTarget = this.selectInterestingNode();
+        } else {
+          this.cameraMode = 'focus';
+        }
+      } else if (this.cameraMode === 'focus') {
+        // From focus, usually return to orbit, sometimes zoom
+        if (this.nodes.size > 3 && Math.random() < 0.3) {
+          this.cameraMode = 'zoom';
+          this.zoomTarget = this.selectInterestingNode();
+        } else {
+          this.cameraMode = 'orbit';
+        }
+      } else {
+        // From zoom, return to orbit or focus
+        this.cameraMode = Math.random() < 0.6 ? 'orbit' : 'focus';
+        this.zoomTarget = null;
+      }
+    }
+  }
+
+  private selectInterestingNode(): ThreatNode | null {
+    // Select a node to zoom into - prefer high-intensity, recent, or high-reputation nodes
+    const candidates: { node: ThreatNode; score: number }[] = [];
+
+    this.nodes.forEach(node => {
+      const age = node.life / node.maxLife;
+      if (age > 0.7) return; // Skip nodes about to expire
+
+      let score = node.intensity * 2;
+      score += (1 - age) * 3; // Prefer newer nodes
+      score += node.size * 0.5; // Larger nodes (repeat offenders) are interesting
+
+      // Bonus for certain threat types
+      if (node.type === 'ransomware' || node.type === 'c2' || node.type === 'breach') {
+        score += 5;
+      }
+
+      candidates.push({ node, score });
+    });
+
+    if (candidates.length === 0) return null;
+
+    // Sort by score and pick from top candidates with some randomness
+    candidates.sort((a, b) => b.score - a.score);
+    const topCount = Math.min(5, candidates.length);
+    const pickIndex = Math.floor(Math.random() * topCount);
+    return candidates[pickIndex].node;
   }
 
   private updateUniforms() {

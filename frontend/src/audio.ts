@@ -126,6 +126,170 @@ export class AudioEngine {
   private droneInterval: ReturnType<typeof setInterval> | null = null;
   private tensionInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Key drift system - slowly modulate musical key over time
+  private keyDriftTimer = 0;
+  private keyDriftInterval = 180; // Seconds between key changes (3 minutes)
+  private keyDriftEnabled = true;
+
+  // Musical journey - sequences of keys that flow naturally
+  private keySequences = {
+    dark: ['C', 'G', 'D', 'A', 'E', 'B', 'F#', 'C#', 'G#', 'D#', 'A#', 'F'], // Circle of fifths
+    descending: ['C', 'B', 'A#', 'A', 'G#', 'G', 'F#', 'F', 'E', 'D#', 'D', 'C#'], // Chromatic descent
+    minor: ['A', 'D', 'G', 'C', 'F', 'A#', 'D#', 'G#', 'C#', 'F#', 'B', 'E'], // Minor key cycle
+  };
+  private currentKeyIndex = 0;
+  private currentKeySequence: 'dark' | 'descending' | 'minor' = 'dark';
+
+  // Scale drift - occasionally shift modes
+  private scaleSequence: (keyof typeof SCALES)[] = ['phrygian', 'minor', 'dorian', 'locrian', 'harmonicMinor'];
+  private currentScaleIndex = 0;
+
+  // Orchestration layers - complexity scales with activity
+  private activityLevel = 0; // 0-1, smoothed event rate
+  private eventCounter = 0; // Events in last measurement period
+  private lastMeasureTime = 0;
+  private orchestrationLayers = {
+    bass: 1.0,      // Always present
+    drones: 0.5,    // Moderate presence
+    pads: 0.2,      // Quiet
+    harmonics: 0.0, // Fades in with activity
+    textures: 0.0,  // High activity only
+  };
+
+  // Additional synths for orchestration
+  private harmonicPad!: Tone.PolySynth;
+  private textureNoise!: Tone.Noise;
+  private textureFilter!: Tone.AutoFilter;
+  private textureGain!: Tone.Gain;
+
+  // Regional voices - different timbres for geographic regions
+  private regionalVoices = {
+    // Asia: metallic, gamelan-inspired, pentatonic tendency
+    asia: { detuneOffset: 5, filterMod: 1.3, harmonicity: 2.5, octaveOffset: 1 },
+    // Europe: orchestral, darker, classical intervals
+    europe: { detuneOffset: -3, filterMod: 0.8, harmonicity: 1.5, octaveOffset: 0 },
+    // Americas: punchy, rhythmic, wider frequency range
+    americas: { detuneOffset: 0, filterMod: 1.0, harmonicity: 2.0, octaveOffset: 0 },
+    // MiddleEast: microtonal feel, resonant, exotic
+    middleEast: { detuneOffset: 15, filterMod: 1.5, harmonicity: 3.0, octaveOffset: 0 },
+    // Africa: percussive, warm, rhythmic emphasis
+    africa: { detuneOffset: 7, filterMod: 0.9, harmonicity: 1.2, octaveOffset: -1 },
+    // Oceania: atmospheric, spacious, delayed
+    oceania: { detuneOffset: -5, filterMod: 1.1, harmonicity: 1.8, octaveOffset: 1 },
+  };
+
+  // Counterpoint - assign octave registers to threat types for layered polyphony
+  private threatRegisters: Record<string, { baseOctave: number; range: number }> = {
+    // Bass register - heavy, ominous threats
+    ransomware: { baseOctave: 1, range: 1 },
+    c2: { baseOctave: 1, range: 2 },
+    breach: { baseOctave: 1, range: 1 },
+    // Low-mid register - aggressive attacks
+    honeypot: { baseOctave: 2, range: 2 },
+    bruteforce: { baseOctave: 2, range: 1 },
+    hijack: { baseOctave: 2, range: 2 },
+    // Mid register - deceptive/technical threats
+    malware: { baseOctave: 3, range: 2 },
+    phishing: { baseOctave: 3, range: 2 },
+    cert: { baseOctave: 3, range: 1 },
+    // High register - ambient/infrastructure
+    tor: { baseOctave: 4, range: 2 },
+    scanner: { baseOctave: 4, range: 1 },
+    bgp: { baseOctave: 3, range: 2 },
+  };
+
+  // Call and Response - track recent source activity for musical answers
+  private sourceCallHistory: Map<string, {
+    lastNotes: string[];
+    lastTime: number;
+    synth: string;
+    count: number;
+  }> = new Map();
+  private callResponseWindow = 10000; // 10 seconds to trigger response
+
+  // Crescendo Chains - sequential attacks from same country build intensity
+  private countryCrescendo: Map<string, {
+    attackCount: number;
+    lastAttack: number;
+    intensity: number;
+  }> = new Map();
+  private crescendoWindow = 15000; // 15 second window for chain
+  private maxCrescendoIntensity = 3;
+
+  // Heartbeat System - sub-bass pulse that accelerates with tension
+  private heartbeatSynth!: Tone.MonoSynth;
+  private heartbeatLoop!: Tone.Loop;
+  private heartbeatBPM = 40; // Base heartbeat rate
+  private targetHeartbeatBPM = 40;
+
+  // Stutter Gates - rhythmic tremolo during high tension
+  private stutterGate!: Tone.Tremolo;
+  private stutterGateGain!: Tone.Gain;
+  private stutterActive = false;
+
+  // Threat Rhythms - track attack timing for polyrhythmic patterns
+  private attackTimings: number[] = []; // Last N attack timestamps
+  private maxTimingMemory = 16;
+  private rhythmPatternSynth!: Tone.MembraneSynth;
+
+  // Dynamic Events - stingers, build-ups, drops
+  private lastTensionValue = 0;
+  private tensionRiseRate = 0;
+  private buildUpActive = false;
+  private dropPending = false;
+  private lastDropTime = 0;
+  private dropCooldown = 30000; // 30 seconds between drops
+
+  // Pre-composed stinger patterns (scale degrees and durations)
+  private stingerPatterns = {
+    ransomware: [
+      { degree: 0, octave: 2, duration: '8n', delay: 0 },
+      { degree: 6, octave: 2, duration: '8n', delay: 0.15 },  // Tritone - maximum tension
+      { degree: 0, octave: 1, duration: '4n', delay: 0.3 },
+      { degree: 1, octave: 1, duration: '2n', delay: 0.5 },   // Minor 2nd
+    ],
+    bgpHijack: [
+      { degree: 0, octave: 3, duration: '16n', delay: 0 },
+      { degree: 4, octave: 3, duration: '16n', delay: 0.08 },
+      { degree: 0, octave: 3, duration: '16n', delay: 0.16 },
+      { degree: 4, octave: 3, duration: '16n', delay: 0.24 },
+      { degree: 7, octave: 2, duration: '4n', delay: 0.4 },
+    ],
+    breach: [
+      { degree: 0, octave: 2, duration: '4n', delay: 0 },
+      { degree: 3, octave: 2, duration: '4n', delay: 0.25 },
+      { degree: 5, octave: 2, duration: '4n', delay: 0.5 },
+      { degree: 0, octave: 1, duration: '1n', delay: 0.75 },
+    ],
+  };
+
+  // Map countries to regions
+  private countryToRegion: Record<string, keyof typeof this.regionalVoices> = {
+    // Asia
+    'CN': 'asia', 'JP': 'asia', 'KR': 'asia', 'TW': 'asia', 'HK': 'asia',
+    'TH': 'asia', 'VN': 'asia', 'ID': 'asia', 'MY': 'asia', 'SG': 'asia',
+    'PH': 'asia', 'IN': 'asia', 'PK': 'asia', 'BD': 'asia',
+    // Europe
+    'DE': 'europe', 'FR': 'europe', 'UK': 'europe', 'GB': 'europe',
+    'IT': 'europe', 'ES': 'europe', 'NL': 'europe', 'BE': 'europe',
+    'PL': 'europe', 'UA': 'europe', 'RU': 'europe', 'SE': 'europe',
+    'NO': 'europe', 'FI': 'europe', 'DK': 'europe', 'AT': 'europe',
+    'CH': 'europe', 'CZ': 'europe', 'RO': 'europe', 'HU': 'europe',
+    // Americas
+    'US': 'americas', 'CA': 'americas', 'MX': 'americas', 'BR': 'americas',
+    'AR': 'americas', 'CO': 'americas', 'CL': 'americas', 'PE': 'americas',
+    'VE': 'americas',
+    // Middle East
+    'IR': 'middleEast', 'SA': 'middleEast', 'AE': 'middleEast',
+    'IL': 'middleEast', 'TR': 'middleEast', 'EG': 'middleEast',
+    'IQ': 'middleEast', 'SY': 'middleEast',
+    // Africa
+    'ZA': 'africa', 'NG': 'africa', 'KE': 'africa', 'GH': 'africa',
+    'ET': 'africa', 'TZ': 'africa', 'MA': 'africa',
+    // Oceania
+    'AU': 'oceania', 'NZ': 'oceania',
+  };
+
   constructor() {}
 
   async init() {
@@ -389,6 +553,70 @@ export class AudioEngine {
     });
     this.bruteHammer.connect(this.tightReverb);
 
+    // === ORCHESTRATION LAYERS ===
+    // Harmonic pad - fades in with activity, adds harmonic richness
+    this.harmonicPad = new Tone.PolySynth(Tone.Synth, {
+      oscillator: { type: 'sine4' },
+      envelope: { attack: 4, decay: 3, sustain: 0.4, release: 8 },
+      volume: -22,
+      maxPolyphony: 8,
+    });
+    this.harmonicPad.connect(this.voidReverb);
+
+    // Texture noise layer - granular background that increases with activity
+    this.textureFilter = new Tone.AutoFilter({
+      frequency: 0.08,
+      baseFrequency: 100,
+      octaves: 3,
+    }).start();
+    this.textureGain = new Tone.Gain(0);
+    this.textureNoise = new Tone.Noise('pink');
+    this.textureNoise.connect(this.textureFilter);
+    this.textureFilter.connect(this.textureGain);
+    this.textureGain.connect(this.voidReverb);
+    this.textureNoise.start();
+
+    // === RHYTHMIC ELEMENTS ===
+
+    // Heartbeat System - sub-bass pulse that accelerates with tension
+    this.heartbeatSynth = new Tone.MonoSynth({
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.01, decay: 0.3, sustain: 0, release: 0.4 },
+      filterEnvelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.3, baseFrequency: 30, octaves: 1 },
+      volume: -18,
+    });
+    this.heartbeatSynth.connect(this.masterCompressor);
+
+    // Heartbeat loop - double-pulse like a real heartbeat
+    this.heartbeatLoop = new Tone.Loop((time) => {
+      if (!this.initialized) return;
+      // Lub-dub pattern
+      this.heartbeatSynth.triggerAttackRelease('C1', '16n', time);
+      this.heartbeatSynth.triggerAttackRelease('C1', '32n', time + 0.15);
+    }, '2n');
+    this.heartbeatLoop.start(0);
+
+    // Stutter Gate - tremolo effect for high tension moments
+    this.stutterGate = new Tone.Tremolo({
+      frequency: 8,
+      depth: 0.8,
+      spread: 0,
+      type: 'square',
+    });
+    this.stutterGateGain = new Tone.Gain(0); // Starts bypassed
+    this.stutterGate.connect(this.stutterGateGain);
+    this.stutterGateGain.connect(this.masterCompressor);
+    this.stutterGate.start();
+
+    // Rhythm Pattern Synth - for polyrhythmic attack patterns
+    this.rhythmPatternSynth = new Tone.MembraneSynth({
+      pitchDecay: 0.01,
+      octaves: 2,
+      envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.1 },
+      volume: -16,
+    });
+    this.rhythmPatternSynth.connect(this.tightReverb);
+
     // Start transport
     Tone.getTransport().start();
 
@@ -486,10 +714,124 @@ export class AudioEngine {
           const sweepFreq = 200 + (sinVal * sinVal) * 300 * this.globalTension;
           this.resonantFilter.frequency.rampTo(sweepFreq, 0.5);
         }
+
+        // Key drift - slowly modulate musical key
+        this.updateKeyDrift();
+
+        // Update orchestration layers based on activity
+        this.updateOrchestration();
+
+        // Rhythmic systems
+        this.updateHeartbeat();
+        this.updateStutterGate();
+
+        // Dynamic events - check for build-ups and drops
+        this.updateDynamicEvents();
       } catch (err) {
         console.error('[Audio] Tension system error:', err);
       }
     }, 200);
+  }
+
+  private updateOrchestration() {
+    const now = Date.now();
+
+    // Measure activity over 5-second windows
+    if (now - this.lastMeasureTime > 5000) {
+      // Calculate events per second
+      const eventsPerSecond = this.eventCounter / 5;
+      // Smooth the activity level
+      this.activityLevel = this.activityLevel * 0.7 + Math.min(eventsPerSecond / 3, 1) * 0.3;
+      this.eventCounter = 0;
+      this.lastMeasureTime = now;
+    }
+
+    // Calculate target layer volumes based on activity
+    const targetLayers = {
+      bass: 1.0,
+      drones: 0.5 + this.activityLevel * 0.3,
+      pads: 0.2 + this.activityLevel * 0.4,
+      harmonics: this.activityLevel * 0.6,
+      textures: Math.max(0, (this.activityLevel - 0.4) * 0.8),
+    };
+
+    // Smoothly interpolate to target volumes
+    const lerpSpeed = 0.02;
+    this.orchestrationLayers.bass += (targetLayers.bass - this.orchestrationLayers.bass) * lerpSpeed;
+    this.orchestrationLayers.drones += (targetLayers.drones - this.orchestrationLayers.drones) * lerpSpeed;
+    this.orchestrationLayers.pads += (targetLayers.pads - this.orchestrationLayers.pads) * lerpSpeed;
+    this.orchestrationLayers.harmonics += (targetLayers.harmonics - this.orchestrationLayers.harmonics) * lerpSpeed;
+    this.orchestrationLayers.textures += (targetLayers.textures - this.orchestrationLayers.textures) * lerpSpeed;
+
+    // Apply to synth volumes
+    this.voidDrone1.volume.rampTo(-18 + this.orchestrationLayers.drones * 6, 1);
+    this.voidDrone2.volume.rampTo(-20 + this.orchestrationLayers.drones * 6, 1);
+    this.ghostPad.volume.rampTo(-25 + this.orchestrationLayers.pads * 10, 1);
+    this.harmonicPad.volume.rampTo(-30 + this.orchestrationLayers.harmonics * 15, 1);
+    this.textureGain.gain.rampTo(this.orchestrationLayers.textures * 0.03, 1);
+
+    // High activity: play harmonic layers
+    if (this.orchestrationLayers.harmonics > 0.3 && Math.random() < 0.02) {
+      const harmonicNotes = [
+        this.getScaleNote(0, 3),
+        this.getScaleNote(2, 3),
+        this.getScaleNote(4, 3),
+      ];
+      this.harmonicPad.triggerAttackRelease(harmonicNotes, '4n', Tone.now() + 0.1);
+    }
+  }
+
+  // Call this from event handlers to track activity
+  private trackEvent() {
+    this.eventCounter++;
+  }
+
+  private updateKeyDrift() {
+    if (!this.keyDriftEnabled) return;
+
+    this.keyDriftTimer += 0.2; // Called every 200ms
+
+    // Check if it's time to shift key
+    if (this.keyDriftTimer >= this.keyDriftInterval) {
+      this.keyDriftTimer = 0;
+
+      // Tension affects key drift behavior
+      if (this.globalTension > 0.6) {
+        // High tension: shift key sequence to something more unstable
+        if (this.currentKeySequence !== 'descending') {
+          this.currentKeySequence = 'descending';
+          console.log('[Audio] Key drift: High tension - switching to chromatic descent');
+        }
+      } else if (this.globalTension < 0.2) {
+        // Low tension: use dark circle of fifths
+        if (this.currentKeySequence !== 'dark') {
+          this.currentKeySequence = 'dark';
+          console.log('[Audio] Key drift: Low tension - returning to dark mode');
+        }
+      }
+
+      // Move to next key in sequence
+      const sequence = this.keySequences[this.currentKeySequence];
+      this.currentKeyIndex = (this.currentKeyIndex + 1) % sequence.length;
+      const newRoot = sequence[this.currentKeyIndex];
+
+      // Only change if different
+      if (newRoot !== this.currentRoot) {
+        this.currentRoot = newRoot;
+        console.log(`[Audio] Key drift: Modulating to ${newRoot}`);
+      }
+
+      // Occasionally shift scale/mode too (every 3 key changes on average)
+      if (Math.random() < 0.33) {
+        this.currentScaleIndex = (this.currentScaleIndex + 1) % this.scaleSequence.length;
+        const newScale = this.scaleSequence[this.currentScaleIndex];
+        this.currentScale = SCALES[newScale];
+        console.log(`[Audio] Key drift: Mode shift to ${newScale}`);
+      }
+
+      // Adjust drift interval based on tension (faster changes during high tension)
+      this.keyDriftInterval = this.globalTension > 0.5 ? 120 : 180; // 2-3 minutes
+    }
   }
 
   private getScaleNote(degree: number, octave: number): string {
@@ -498,6 +840,388 @@ export class AudioEngine {
 
   private addTension(amount: number) {
     this.threatAccumulator = Math.min(15, this.threatAccumulator + amount);
+    this.trackEvent(); // Track for orchestration layers
+    this.recordAttackTiming(); // Track for rhythm patterns
+  }
+
+  // Get regional voice settings for a country
+  private getRegionalVoice(country?: string) {
+    if (!country) return this.regionalVoices.americas; // Default
+    const region = this.countryToRegion[country];
+    return region ? this.regionalVoices[region] : this.regionalVoices.americas;
+  }
+
+  // Apply regional detune to a synth temporarily
+  private applyRegionalDetune(synth: Tone.MonoSynth | Tone.PolySynth, country?: string) {
+    const voice = this.getRegionalVoice(country);
+    try {
+      synth.set({ detune: voice.detuneOffset });
+    } catch {
+      // Some synths may not support detune
+    }
+  }
+
+  // Get scale note with regional octave offset
+  private getRegionalNote(degree: number, baseOctave: number, country?: string): string {
+    const voice = this.getRegionalVoice(country);
+    return this.getScaleNote(degree, baseOctave + voice.octaveOffset);
+  }
+
+  // Counterpoint - get note in the correct register for threat type
+  private getCounterpointNote(degree: number, threatType: string, country?: string): string {
+    const register = this.threatRegisters[threatType] || { baseOctave: 3, range: 1 };
+    const octaveVariation = Math.floor(Math.random() * register.range);
+    return this.getRegionalNote(degree, register.baseOctave + octaveVariation, country);
+  }
+
+  // Call and Response - record a "call" from a source
+  private recordCall(sourceKey: string, notes: string[], synthName: string) {
+    const now = Date.now();
+    const existing = this.sourceCallHistory.get(sourceKey);
+
+    if (existing) {
+      existing.lastNotes = notes;
+      existing.lastTime = now;
+      existing.synth = synthName;
+      existing.count++;
+    } else {
+      this.sourceCallHistory.set(sourceKey, {
+        lastNotes: notes,
+        lastTime: now,
+        synth: synthName,
+        count: 1,
+      });
+    }
+
+    // Cleanup old entries
+    if (this.sourceCallHistory.size > 100) {
+      const oldestKey = this.sourceCallHistory.keys().next().value;
+      if (oldestKey) this.sourceCallHistory.delete(oldestKey);
+    }
+  }
+
+  // Call and Response - check if we should play a response and return response notes
+  private getResponseNotes(sourceKey: string): string[] | null {
+    const history = this.sourceCallHistory.get(sourceKey);
+    if (!history) return null;
+
+    const timeSinceCall = Date.now() - history.lastTime;
+
+    // Only respond if within window and this is a repeat (count > 1)
+    if (timeSinceCall > this.callResponseWindow || history.count < 2) return null;
+
+    // Create response by inverting/transposing the original notes
+    const responseNotes: string[] = [];
+    for (const note of history.lastNotes) {
+      // Parse the note
+      const match = note.match(/([A-G]#?)(\d+)/);
+      if (!match) continue;
+
+      const [, noteName, octaveStr] = match;
+      const octave = parseInt(octaveStr);
+
+      // Invert: go opposite direction in scale, transpose up
+      const noteIndex = ROOT_NOTES.indexOf(noteName);
+      const invertedIndex = (12 - noteIndex) % 12;
+      const responseNote = ROOT_NOTES[invertedIndex] + (octave + 1);
+      responseNotes.push(responseNote);
+    }
+
+    return responseNotes.length > 0 ? responseNotes : null;
+  }
+
+  // Crescendo Chains - update country intensity and return current level
+  private updateCrescendo(country: string): number {
+    if (!country) return 1;
+
+    const now = Date.now();
+    const existing = this.countryCrescendo.get(country);
+
+    if (existing) {
+      const timeSinceLast = now - existing.lastAttack;
+
+      if (timeSinceLast < this.crescendoWindow) {
+        // Chain continues - increase intensity
+        existing.attackCount++;
+        existing.intensity = Math.min(
+          this.maxCrescendoIntensity,
+          1 + Math.log2(existing.attackCount + 1) * 0.5
+        );
+        existing.lastAttack = now;
+      } else {
+        // Chain broken - reset
+        existing.attackCount = 1;
+        existing.intensity = 1;
+        existing.lastAttack = now;
+      }
+      return existing.intensity;
+    } else {
+      this.countryCrescendo.set(country, {
+        attackCount: 1,
+        lastAttack: now,
+        intensity: 1,
+      });
+      return 1;
+    }
+  }
+
+  // Apply crescendo to synth parameters
+  private applyCrescendo(intensity: number, synth: Tone.MonoSynth | Tone.PolySynth) {
+    try {
+      // Increase volume slightly with intensity
+      const volumeBoost = (intensity - 1) * 3; // Up to +6dB at max intensity
+      synth.volume.rampTo(synth.volume.value + volumeBoost, 0.1);
+    } catch {
+      // Some synths may not support this
+    }
+  }
+
+  // === RHYTHMIC SYSTEMS ===
+
+  // Track attack timing for rhythm patterns
+  private recordAttackTiming() {
+    const now = Date.now();
+    this.attackTimings.push(now);
+
+    // Keep only recent timings
+    if (this.attackTimings.length > this.maxTimingMemory) {
+      this.attackTimings.shift();
+    }
+
+    // Analyze rhythm and potentially trigger polyrhythmic response
+    this.analyzeAndPlayRhythm();
+  }
+
+  // Analyze attack timings and create polyrhythmic patterns
+  private analyzeAndPlayRhythm() {
+    if (this.attackTimings.length < 4) return;
+
+    // Calculate intervals between attacks
+    const intervals: number[] = [];
+    for (let i = 1; i < this.attackTimings.length; i++) {
+      intervals.push(this.attackTimings[i] - this.attackTimings[i - 1]);
+    }
+
+    // Find average interval
+    const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+
+    // If attacks are coming in rhythmically (regular intervals), create counter-rhythm
+    const variance = intervals.reduce((acc, i) => acc + Math.abs(i - avgInterval), 0) / intervals.length;
+    const isRhythmic = variance < avgInterval * 0.3; // Low variance = rhythmic
+
+    if (isRhythmic && avgInterval < 2000 && avgInterval > 100) {
+      // Create polyrhythmic response - play at 3:2 or 4:3 ratio
+      const counterInterval = avgInterval * (Math.random() < 0.5 ? 1.5 : 1.33);
+
+      // Schedule a few counter-rhythm hits
+      const now = Tone.now();
+      const numHits = Math.min(4, Math.floor(3000 / counterInterval));
+
+      for (let i = 0; i < numHits; i++) {
+        const time = now + (counterInterval * i) / 1000;
+        const note = this.getScaleNote(i % 5, 2);
+        try {
+          this.rhythmPatternSynth.triggerAttackRelease(note, '32n', time);
+        } catch {
+          // Ignore timing errors
+        }
+      }
+    }
+  }
+
+  // Update heartbeat based on tension
+  private updateHeartbeat() {
+    // Heartbeat accelerates with tension: 40 BPM at rest, up to 120 BPM at max tension
+    this.targetHeartbeatBPM = 40 + this.globalTension * 80;
+
+    // Smooth transition
+    this.heartbeatBPM += (this.targetHeartbeatBPM - this.heartbeatBPM) * 0.05;
+
+    // Convert BPM to loop interval
+    const intervalSeconds = 60 / this.heartbeatBPM;
+    this.heartbeatLoop.interval = intervalSeconds;
+
+    // Volume also increases with tension
+    const heartbeatVolume = -20 + this.globalTension * 8;
+    this.heartbeatSynth.volume.rampTo(heartbeatVolume, 0.5);
+  }
+
+  // Update stutter gate based on tension
+  private updateStutterGate() {
+    const tensionThreshold = 0.5;
+
+    if (this.globalTension > tensionThreshold && !this.stutterActive) {
+      // Activate stutter gate
+      this.stutterActive = true;
+      this.stutterGateGain.gain.rampTo(0.3, 0.5);
+
+      // Route some synths through stutter gate
+      this.spectralSynth.disconnect();
+      this.spectralSynth.connect(this.stutterGate);
+
+      console.log('[Audio] Stutter gate activated');
+    } else if (this.globalTension <= tensionThreshold && this.stutterActive) {
+      // Deactivate stutter gate
+      this.stutterActive = false;
+      this.stutterGateGain.gain.rampTo(0, 0.5);
+
+      // Restore normal routing
+      this.spectralSynth.disconnect();
+      this.spectralSynth.connect(this.voidReverb);
+
+      console.log('[Audio] Stutter gate deactivated');
+    }
+
+    // Modulate stutter frequency with tension (faster = more urgent)
+    if (this.stutterActive) {
+      const stutterFreq = 6 + this.globalTension * 12; // 6-18 Hz
+      this.stutterGate.frequency.rampTo(stutterFreq, 0.3);
+    }
+  }
+
+  // === DYNAMIC EVENTS - Stingers, Build-ups, Drops ===
+
+  private updateDynamicEvents() {
+    // Calculate tension rise rate
+    this.tensionRiseRate = (this.globalTension - this.lastTensionValue) / 0.2; // Per 200ms
+    this.lastTensionValue = this.globalTension;
+
+    // Build-up detection - tension rising rapidly
+    if (this.tensionRiseRate > 0.05 && this.globalTension > 0.3 && !this.buildUpActive) {
+      this.triggerBuildUp();
+    }
+
+    // Drop detection - tension was high and is now falling
+    if (this.globalTension < 0.3 && this.lastTensionValue > 0.6 && !this.dropPending) {
+      const now = Date.now();
+      if (now - this.lastDropTime > this.dropCooldown) {
+        this.triggerDrop();
+        this.lastDropTime = now;
+      }
+    }
+  }
+
+  // Trigger build-up effect - rising filter sweeps and accelerating rhythm
+  private triggerBuildUp() {
+    if (this.buildUpActive) return;
+    this.buildUpActive = true;
+
+    console.log('[Audio] Build-up triggered');
+
+    try {
+      const now = Tone.now();
+
+      // Rising filter sweep
+      this.darkFilter.frequency.rampTo(200, 0, now);
+      this.darkFilter.frequency.rampTo(2000, 3, now);
+
+      // Accelerating rhythm pattern
+      const numHits = 8;
+      for (let i = 0; i < numHits; i++) {
+        // Accelerating timing - each hit closer together
+        const delay = (1 - Math.pow(i / numHits, 2)) * 2;
+        const time = now + delay;
+        const note = this.getScaleNote(i % 5, 3);
+
+        this.rhythmPatternSynth.triggerAttackRelease(note, '32n', time);
+      }
+
+      // Rising noise swell
+      this.whisperGain.gain.rampTo(0.1, 2, now);
+      this.whisperGain.gain.rampTo(0.02, 1, now + 2);
+
+      // Pitch shift rise
+      this.pitchShift.pitch = -2;
+      setTimeout(() => {
+        if (this.initialized) {
+          this.pitchShift.pitch = 0;
+          this.buildUpActive = false;
+        }
+      }, 3000);
+    } catch (err) {
+      this.buildUpActive = false;
+    }
+  }
+
+  // Trigger drop effect - brief silence then heavy bass
+  private triggerDrop() {
+    console.log('[Audio] Drop triggered');
+    this.dropPending = true;
+
+    try {
+      const now = Tone.now();
+
+      // Brief silence - duck the master volume
+      this.masterGain.gain.rampTo(0.1, 0.1, now);
+
+      // After silence, heavy bass drop
+      setTimeout(() => {
+        if (!this.initialized) return;
+
+        const dropTime = Tone.now();
+
+        // Restore volume with impact
+        this.masterGain.gain.rampTo(1.2, 0.05, dropTime);
+        this.masterGain.gain.rampTo(1.0, 0.5, dropTime + 0.1);
+
+        // Heavy bass impact
+        this.infraBass.triggerAttackRelease('C0', '1n', dropTime);
+        this.subDrone.triggerAttackRelease('C1', '2n', dropTime);
+
+        // Deep chord
+        const dropChord = [
+          this.getScaleNote(0, 1),
+          this.getScaleNote(4, 1),
+          this.getScaleNote(0, 2),
+        ];
+        this.ransomDrone.triggerAttackRelease(dropChord, '2n', dropTime);
+
+        // Filter slam - open then close
+        this.darkFilter.frequency.setValueAtTime(2000, dropTime);
+        this.darkFilter.frequency.rampTo(400, 2, dropTime + 0.1);
+
+        // Glitch burst on drop
+        this.triggerGlitch(1.0);
+
+        this.dropPending = false;
+      }, 300); // 300ms of silence
+
+    } catch (err) {
+      this.dropPending = false;
+    }
+  }
+
+  // Play a pre-composed stinger pattern
+  playStinger(type: 'ransomware' | 'bgpHijack' | 'breach') {
+    if (!this.initialized) return;
+
+    const pattern = this.stingerPatterns[type];
+    if (!pattern) return;
+
+    console.log(`[Audio] Playing ${type} stinger`);
+
+    try {
+      const now = Tone.now();
+
+      for (const note of pattern) {
+        const noteStr = this.getScaleNote(note.degree, note.octave);
+        const time = now + note.delay;
+
+        // Use ransomDrone for heavy stingers
+        this.ransomDrone.triggerAttackRelease([noteStr], note.duration as Tone.Unit.Time, time);
+
+        // Add metallic layer for impact
+        if (note.delay === 0) {
+          this.metallicSynth.triggerAttackRelease('8n', time);
+        }
+      }
+
+      // Boost tension after stinger
+      this.addTension(2);
+
+    } catch (err) {
+      console.error('[Audio] Stinger error:', err);
+    }
   }
 
   private lastGlitchTime = 0;
@@ -583,26 +1307,45 @@ export class AudioEngine {
     try {
       const now = Tone.now() + 0.02;
       const attackType = attack.attackType || 'scan';
+      const voice = this.getRegionalVoice(attack.country);
+      const sourceKey = attack.sourceIP || attack.country || 'unknown';
 
-      this.addTension(0.8);
+      // Crescendo chain - attacks from same country build intensity
+      const crescendo = this.updateCrescendo(attack.country);
+      this.addTension(0.8 * crescendo);
 
-      // Stutter hit
-      this.stutterSynth.triggerAttackRelease('C1', '16n', now);
+      // Counterpoint - use honeypot register (low-mid)
+      const mainNote = this.getCounterpointNote(0, 'honeypot', attack.country);
+      this.stutterSynth.triggerAttackRelease(mainNote, '16n', now);
+
+      // Check for call-response (repeat attacker)
+      const responseNotes = this.getResponseNotes(sourceKey);
+      if (responseNotes && responseNotes.length > 0) {
+        // Play response - answer the previous attack
+        this.spectralSynth.triggerAttackRelease(responseNotes.slice(0, 2), '8n', now + 0.15);
+      }
 
       if (attackType.includes('brute') || attackType.includes('ssh') || attackType.includes('rdp')) {
-        // Aggressive repeated hits for bruteforce
-        for (let i = 0; i < 3; i++) {
-          this.bruteHammer.triggerAttackRelease('G0', '32n', now + 0.02 + i * 0.08);
+        // Aggressive hits - intensity scales with crescendo
+        const hammerNote = this.getCounterpointNote(4, 'bruteforce', attack.country);
+        this.bruteHammer.triggerAttackRelease(hammerNote, '32n', now + 0.1);
+        if (crescendo > 1.5) {
+          // Extra hit on crescendo chain
+          this.bruteHammer.triggerAttackRelease(hammerNote, '32n', now + 0.25);
         }
-        this.addTension(0.5);
+        this.addTension(0.5 * crescendo);
       } else if (attackType.includes('exploit') || attackType.includes('smb')) {
-        // Heavy metallic for exploits
+        // Heavy metallic for exploits - regional harmonicity
+        this.metallicSynth.harmonicity = voice.harmonicity * crescendo;
         this.metallicSynth.triggerAttackRelease('4n', now);
-        this.triggerGlitch(0.6);
+        this.triggerGlitch(0.6 * crescendo);
       } else {
         // Light static for scans
         this.triggerStatic('16n');
       }
+
+      // Record this call for future responses
+      this.recordCall(sourceKey, [mainNote], 'stutterSynth');
     } catch (err) {
       console.error('[Audio] Honeypot attack error:', err);
     }
@@ -616,29 +1359,54 @@ export class AudioEngine {
       const now = Tone.now() + 0.02;
       const params = hashToParams(c2.ip);
       const malware = c2.malware?.toLowerCase() || '';
+      const voice = this.getRegionalVoice(c2.country);
+      const sourceKey = c2.ip || c2.malware || 'unknown';
 
-      this.addTension(2);
+      // Crescendo chain
+      const crescendo = this.updateCrescendo(c2.country);
+      this.addTension(2 * crescendo);
 
-      // Command pulse - mechanical, rhythmic
-      const note = this.getScaleNote(Math.floor(params.freq * 5), 1);
+      // Apply regional detune
+      this.applyRegionalDetune(this.c2Pulse, c2.country);
+
+      // Counterpoint - C2 is in bass register
+      const note = this.getCounterpointNote(Math.floor(params.freq * 5), 'c2', c2.country);
+      const note2 = this.getCounterpointNote(Math.floor(params.freq * 5) + 2, 'c2', c2.country);
       this.c2Pulse.triggerAttackRelease(note, '8n', now);
-      this.c2Pulse.triggerAttackRelease(note, '16n', now + 0.3);
+      this.c2Pulse.triggerAttackRelease(note2, '16n', now + 0.3);
 
-      // Online C2s are more threatening
+      // Call-response for repeat C2 contacts
+      const responseNotes = this.getResponseNotes(sourceKey);
+      if (responseNotes && responseNotes.length > 0) {
+        // Ethereal response from ghostPad - the "answer"
+        this.ghostPad.triggerAttackRelease(responseNotes.slice(0, 2), '4n', now + 0.4);
+      }
+
+      // Online C2s are more threatening - intensity scales with crescendo
       if (c2.status === 'online') {
         this.infraBass.triggerAttackRelease('C0', '1n', now);
-        this.addTension(1.5);
+        this.addTension(1.5 * crescendo);
 
-        // Spectral presence
-        this.fmGhost.triggerAttackRelease(this.getScaleNote(0, 2), '2n', now + 0.1);
+        // Spectral presence with regional harmonicity
+        this.fmGhost.harmonicity.value = voice.harmonicity;
+        const ghostNote = this.getCounterpointNote(0, 'c2', c2.country);
+        this.fmGhost.triggerAttackRelease(ghostNote, '2n', now + 0.1);
+
+        // Extra layer on crescendo
+        if (crescendo > 2) {
+          this.ransomDrone.triggerAttackRelease([note], '2n', now + 0.2);
+        }
       }
 
       // Malware family signatures
       if (malware.includes('emotet') || malware.includes('trickbot')) {
-        this.triggerGlitch(0.9);
+        this.triggerGlitch(0.9 * crescendo);
       } else if (malware.includes('qakbot') || malware.includes('icedid')) {
         this.staticBurst.triggerAttackRelease('4n', now + 0.2);
       }
+
+      // Record for call-response
+      this.recordCall(sourceKey, [note, note2], 'c2Pulse');
     } catch (err) {
       console.error('[Audio] Botnet C2 error:', err);
     }
@@ -653,6 +1421,9 @@ export class AudioEngine {
 
       // Maximum tension
       this.addTension(5);
+
+      // Play ransomware stinger - dramatic pre-composed phrase
+      this.playStinger('ransomware');
 
       // Deep dread drone
       this.infraBass.triggerAttackRelease('C0', '2n', now);
@@ -744,26 +1515,23 @@ export class AudioEngine {
     if (!this.initialized) return;
     if (!this.throttleEvent('bruteforce', 80)) return;
     try {
-      const now = Tone.now() + 0.02;
+      const now = Tone.now() + 0.05; // Larger offset to prevent scheduling conflicts
       const attackType = attack.attackType || 'generic';
 
       this.addTension(1);
 
-      // Persistent hammering
+      // Single hammer hit (MembraneSynth is monophonic)
       this.bruteHammer.triggerAttackRelease('E0', '16n', now);
-      this.bruteHammer.triggerAttackRelease('E0', '32n', now + 0.1);
 
       if (attackType.includes('ssh')) {
-        // SSH: mechanical repetition
-        this.c2Pulse.triggerAttackRelease(this.getScaleNote(2, 1), '16n', now + 0.05);
+        // SSH: mechanical repetition using c2Pulse instead
+        this.c2Pulse.triggerAttackRelease(this.getScaleNote(2, 1), '16n', now + 0.1);
       } else if (attackType.includes('mail') || attackType.includes('spam')) {
         // Mail: buzzing annoyance
         this.triggerStatic('8n');
       } else if (attackType.includes('login')) {
-        // Login: extra aggressive
-        for (let i = 0; i < 4; i++) {
-          this.stutterSynth.triggerAttackRelease('C1', '32n', now + 0.02 + i * 0.06);
-        }
+        // Login: use stutterSynth with proper spacing
+        this.stutterSynth.triggerAttackRelease('C1', '8n', now + 0.15);
       }
     } catch (err) {
       console.error('[Audio] Bruteforce error:', err);
@@ -777,25 +1545,30 @@ export class AudioEngine {
     try {
       const now = Tone.now() + 0.02;
       const params = hashToParams(node.fingerprint);
+      const voice = this.getRegionalVoice(node.country);
 
       // Tor is ambient, mysterious - less tension
       this.addTension(0.3);
 
-      // Anonymous whisper
-      const whisperNote = this.getScaleNote(Math.floor(params.freq * 7), 2);
+      // Apply regional detune for ethereal quality
+      this.applyRegionalDetune(this.torWhisper, node.country);
+
+      // Anonymous whisper with regional melodic content
+      const whisperNote = this.getRegionalNote(Math.floor(params.freq * 7), 2, node.country);
       this.torWhisper.triggerAttackRelease([whisperNote], '2n', now);
 
-      // Occasional shimmer for high-bandwidth nodes
+      // Occasional shimmer for high-bandwidth nodes - regional octave
       if (node.bandwidth > 50000000) {
         const shimmerNotes = [
-          this.getScaleNote(4, 3),
-          this.getScaleNote(6, 3),
+          this.getRegionalNote(4, 3, node.country),
+          this.getRegionalNote(6, 3, node.country),
         ];
         this.ghostPad.triggerAttackRelease(shimmerNotes, '1n', now + 1);
       }
 
-      // Increase void reverb for Tor
-      this.feedbackDelay.wet.rampTo(0.35, 0.5, now);
+      // Increase void reverb for Tor - oceania gets extra spaciousness
+      const reverbAmount = node.country && this.countryToRegion[node.country] === 'oceania' ? 0.45 : 0.35;
+      this.feedbackDelay.wet.rampTo(reverbAmount, 0.5, now);
       this.feedbackDelay.wet.rampTo(0.2, 3, now + 1);
     } catch (err) {
       console.error('[Audio] Tor node error:', err);
@@ -888,6 +1661,11 @@ export class AudioEngine {
       // Breaches are catastrophic - high tension
       this.addTension(breach.pwnCount > 1000000 ? 2.0 : 1.5);
 
+      // Play breach stinger for major breaches (1M+ accounts)
+      if (breach.pwnCount > 1000000) {
+        this.playStinger('breach');
+      }
+
       // Deep, ominous drone for massive data loss
       const bassNote = this.getScaleNote(0, 1);
       this.ransomDrone.triggerAttackRelease(bassNote, '2n', now);
@@ -966,6 +1744,11 @@ export class AudioEngine {
 
       if (bgpEvent.eventType === 'hijack') {
         // Hijack - aggressive, alarming
+        // Play stinger for critical/high severity hijacks
+        if (bgpEvent.severity === 'critical' || bgpEvent.severity === 'high') {
+          this.playStinger('bgpHijack');
+        }
+
         // MetalSynth rapid strikes for alarm effect
         this.metallicSynth.triggerAttackRelease('16n', now);
         this.metallicSynth.triggerAttackRelease('16n', now + 0.1);
