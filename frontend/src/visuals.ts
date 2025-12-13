@@ -71,6 +71,13 @@ const THREAT_COLORS: Record<string, number> = {
   bgp:        0xcc44ff,  // magenta
 };
 
+// === MOBILE DETECTION ===
+
+function isMobile(): boolean {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+    (window.innerWidth < 768);
+}
+
 // === NEURAL STORM ENGINE ===
 
 export class VisualEngine {
@@ -80,13 +87,14 @@ export class VisualEngine {
   private renderer: THREE.WebGLRenderer;
   private composer: EffectComposer;
   private bloomPass: UnrealBloomPass;
+  private isMobileDevice: boolean;
 
   // Neural network
   private neurons: Neuron[] = [];
   private pulses: Pulse[] = [];
   private pendingCascades: CascadeEvent[] = [];
-  private neuronCount = 800;
-  private maxConnections = 6;
+  private neuronCount: number;
+  private maxConnections: number;
   private connectionDistance = 60;
 
   // Rendering
@@ -117,6 +125,17 @@ export class VisualEngine {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
+    this.isMobileDevice = isMobile();
+
+    // Mobile-optimized settings
+    if (this.isMobileDevice) {
+      this.neuronCount = 300;  // Fewer neurons on mobile
+      this.maxConnections = 4;
+      console.log('[Neural Storm] Mobile mode: reduced particle count');
+    } else {
+      this.neuronCount = 800;
+      this.maxConnections = 6;
+    }
 
     // Scene
     this.scene = new THREE.Scene();
@@ -126,24 +145,44 @@ export class VisualEngine {
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 1, 1000);
     this.camera.position.set(0, 0, 200);
 
-    // Renderer
+    // Renderer with mobile-friendly settings
     this.renderer = new THREE.WebGLRenderer({
       canvas,
       antialias: false,
-      powerPreference: 'high-performance'
+      powerPreference: this.isMobileDevice ? 'low-power' : 'high-performance',
+      alpha: false,
+      stencil: false,
+      depth: true,
     });
     this.renderer.setSize(window.innerWidth, window.innerHeight);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, this.isMobileDevice ? 1.5 : 2));
 
-    // Post-processing with bloom
+    // Handle WebGL context loss
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      console.warn('[Neural Storm] WebGL context lost');
+    });
+
+    canvas.addEventListener('webglcontextrestored', () => {
+      console.log('[Neural Storm] WebGL context restored');
+      this.initNeuronRendering();
+      this.initAxonRendering();
+      this.initPulseRendering();
+    });
+
+    // Post-processing with bloom (reduced on mobile)
     this.composer = new EffectComposer(this.renderer);
     const renderPass = new RenderPass(this.scene, this.camera);
     this.composer.addPass(renderPass);
 
+    const bloomResolution = this.isMobileDevice
+      ? new THREE.Vector2(window.innerWidth / 2, window.innerHeight / 2)
+      : new THREE.Vector2(window.innerWidth, window.innerHeight);
+
     this.bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(window.innerWidth, window.innerHeight),
-      1.5,   // strength
-      0.4,   // radius
+      bloomResolution,
+      this.isMobileDevice ? 1.0 : 1.5,   // strength (lower on mobile)
+      this.isMobileDevice ? 0.3 : 0.4,   // radius
       0.85   // threshold
     );
     this.composer.addPass(this.bloomPass);
@@ -368,11 +407,13 @@ export class VisualEngine {
     this.scene.add(this.axonLines);
   }
 
+  private maxPulses = 1000;
+
   private initPulseRendering() {
-    const maxPulses = 1000;
-    const positions = new Float32Array(maxPulses * 3);
-    const colors = new Float32Array(maxPulses * 3);
-    const sizes = new Float32Array(maxPulses);
+    this.maxPulses = this.isMobileDevice ? 300 : 1000;
+    const positions = new Float32Array(this.maxPulses * 3);
+    const colors = new Float32Array(this.maxPulses * 3);
+    const sizes = new Float32Array(this.maxPulses);
 
     this.pulseGeometry = new THREE.BufferGeometry();
     this.pulseGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
@@ -491,6 +532,14 @@ export class VisualEngine {
     this.spawnThreat('scanner', 1);
   }
 
+  // Alias for GreyNoise scanner data
+  updateScannerNoise(data: GreyNoiseData) {
+    // Scanner noise creates ambient low-level activity
+    if (data.scannerCount > 0) {
+      this.spawnThreat('scanner', Math.min(3, Math.floor(data.scannerCount / 100)));
+    }
+  }
+
   handleHoneypotAttack(attack: DShieldAttack) {
     this.spawnThreat('honeypot', 2);
   }
@@ -605,7 +654,7 @@ export class VisualEngine {
 
     const completedPulses: number[] = [];
 
-    for (let i = 0; i < this.pulses.length && i < 1000; i++) {
+    for (let i = 0; i < this.pulses.length && i < this.maxPulses; i++) {
       const pulse = this.pulses[i];
       pulse.progress += deltaTime * pulse.speed;
 
@@ -646,7 +695,7 @@ export class VisualEngine {
     }
 
     // Clear unused slots
-    for (let i = this.pulses.length; i < 1000; i++) {
+    for (let i = this.pulses.length; i < this.maxPulses; i++) {
       sizes.array[i] = 0;
     }
 
@@ -726,6 +775,13 @@ export class VisualEngine {
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(w, h);
     this.composer.setSize(w, h);
+
+    // Update bloom resolution
+    if (this.isMobileDevice) {
+      this.bloomPass.resolution.set(w / 2, h / 2);
+    } else {
+      this.bloomPass.resolution.set(w, h);
+    }
   }
 
   dispose() {
