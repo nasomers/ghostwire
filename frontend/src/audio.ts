@@ -946,11 +946,7 @@ export class AudioEngine {
       }
 
       // Glitchy artifacts
-      this.glitchSynth.triggerAttackRelease(
-        this.getScaleNote(params.offset % 7, 4),
-        '32n',
-        now + 0.2
-      );
+      this.glitchSynth.triggerAttackRelease('32n', now + 0.2);
     } catch (err) {
       console.error('[Audio] Spamhaus error:', err);
     }
