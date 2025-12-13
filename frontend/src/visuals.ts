@@ -616,6 +616,7 @@ export class VisualEngine {
   private activityCenter = new THREE.Vector3(0, 0, 0); // Weighted center of recent activity
   private cameraMode: 'orbit' | 'focus' | 'zoom' = 'orbit'; // Current camera behavior
   private cameraModeTimer = 0; // Time in current mode
+  private cameraModeDuration = 60; // Duration of current mode (set when entering mode)
   private zoomTarget: ThreatNode | null = null; // Node to zoom into
 
   // Mood phases system - evolving visual atmosphere
@@ -2690,14 +2691,8 @@ export class VisualEngine {
   }
 
   private updateCameraMode() {
-    // Mode transition logic
-    const modeDurations = {
-      orbit: 45 + Math.random() * 30,    // 45-75 seconds orbiting
-      focus: 20 + Math.random() * 15,    // 20-35 seconds focused
-      zoom: 8 + Math.random() * 7        // 8-15 seconds zoomed
-    };
-
-    if (this.cameraModeTimer > modeDurations[this.cameraMode]) {
+    // Check if current mode duration has elapsed
+    if (this.cameraModeTimer > this.cameraModeDuration) {
       this.cameraModeTimer = 0;
 
       // Choose next mode based on current state
@@ -2706,21 +2701,31 @@ export class VisualEngine {
         if (this.nodes.size > 5 && Math.random() < 0.4) {
           // 40% chance to zoom to an interesting node
           this.cameraMode = 'zoom';
+          this.cameraModeDuration = 8 + Math.random() * 7; // 8-15 seconds zoomed
           this.zoomTarget = this.selectInterestingNode();
         } else {
           this.cameraMode = 'focus';
+          this.cameraModeDuration = 20 + Math.random() * 15; // 20-35 seconds focused
         }
       } else if (this.cameraMode === 'focus') {
         // From focus, usually return to orbit, sometimes zoom
         if (this.nodes.size > 3 && Math.random() < 0.3) {
           this.cameraMode = 'zoom';
+          this.cameraModeDuration = 8 + Math.random() * 7; // 8-15 seconds zoomed
           this.zoomTarget = this.selectInterestingNode();
         } else {
           this.cameraMode = 'orbit';
+          this.cameraModeDuration = 45 + Math.random() * 30; // 45-75 seconds orbiting
         }
       } else {
         // From zoom, return to orbit or focus
-        this.cameraMode = Math.random() < 0.6 ? 'orbit' : 'focus';
+        if (Math.random() < 0.6) {
+          this.cameraMode = 'orbit';
+          this.cameraModeDuration = 45 + Math.random() * 30; // 45-75 seconds orbiting
+        } else {
+          this.cameraMode = 'focus';
+          this.cameraModeDuration = 20 + Math.random() * 15; // 20-35 seconds focused
+        }
         this.zoomTarget = null;
       }
     }
