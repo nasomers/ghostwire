@@ -219,10 +219,10 @@ export class VisualEngine {
         position: new THREE.Vector3(x, y, z),
         connections: [],
         state: 'resting',
-        brightness: 0.15 + Math.random() * 0.1, // Ambient glow
-        targetBrightness: 0.15,
+        brightness: 0.4 + Math.random() * 0.2, // Brighter ambient glow
+        targetBrightness: 0.4,
         refractoryTimer: 0,
-        baseSize: 0.8 + Math.random() * 0.4,
+        baseSize: 2.0 + Math.random() * 1.0, // Larger base size
       });
     }
 
@@ -627,7 +627,7 @@ export class VisualEngine {
         neuron.refractoryTimer -= deltaTime;
         if (neuron.refractoryTimer <= 0) {
           neuron.state = 'resting';
-          neuron.targetBrightness = 0.15 + Math.random() * 0.1;
+          neuron.targetBrightness = 0.4 + Math.random() * 0.2;
         } else if (neuron.state === 'firing' && neuron.refractoryTimer < 0.3) {
           neuron.state = 'refractory';
         }
@@ -683,9 +683,9 @@ export class VisualEngine {
         colors.array[i * 3 + 1] = pulse.color.g;
         colors.array[i * 3 + 2] = pulse.color.b;
 
-        // Pulse size varies along path
+        // Pulse size varies along path - bigger and brighter
         const sizePulse = Math.sin(pulse.progress * Math.PI);
-        sizes.array[i] = 1.5 * sizePulse * pulse.intensity;
+        sizes.array[i] = 4.0 * sizePulse * pulse.intensity;
       }
     }
 

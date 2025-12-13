@@ -167,30 +167,10 @@ function formatRelativeTime(date: Date): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
-// Show geographic label for country
+// Show geographic label for country (disabled for Neural Storm visualization)
 function showGeoLabel(country: string | undefined, severity: Severity, detail?: string) {
-  if (!country || !geoLabels) return;
-
-  const code = country.toUpperCase();
-  const pos = COUNTRY_SCREEN_POS[code];
-  if (!pos) return; // Unknown country
-
-  const name = COUNTRY_NAMES[code] || country;
-
-  const label = document.createElement('div');
-  label.className = `geo-label${severity === 'critical' ? ' severity-critical' : severity === 'high' ? ' severity-high' : ''}`;
-  label.style.left = `${pos[0]}%`;
-  label.style.top = `${pos[1]}%`;
-  label.textContent = detail ? `${name} · ${detail}` : name;
-
-  geoLabels.appendChild(label);
-
-  // Remove after animation completes
-  setTimeout(() => {
-    if (label.parentNode) {
-      label.parentNode.removeChild(label);
-    }
-  }, 3500);
+  // Disabled - Neural Storm doesn't use geographic positioning
+  return;
 }
 
 // Add event to the live feed
