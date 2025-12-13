@@ -592,6 +592,7 @@ export class VisualEngine {
   private hoveredNode: ThreatNode | null = null;
   private selectedNode: ThreatNode | null = null;
   private highlightedNodes: Set<string> = new Set();
+  private nodeIndexMap: string[] = []; // Maps geometry index to node ID
 
   // Reputation tracking - sources that hit multiple times grow larger
   private sourceReputation: Map<string, { count: number; lastSeen: number; nodeIds: string[] }> = new Map();
@@ -765,8 +766,8 @@ export class VisualEngine {
     const intersects = this.raycaster.intersectObject(this.threatPoints);
 
     if (intersects.length > 0 && intersects[0].index !== undefined) {
-      const nodeArray = Array.from(this.nodes.values());
-      const node = nodeArray[intersects[0].index];
+      const nodeId = this.nodeIndexMap[intersects[0].index];
+      const node = nodeId ? this.nodes.get(nodeId) : undefined;
       if (node && node !== this.hoveredNode) {
         this.hoveredNode = node;
         this.highlightRelatedNodes(node);
@@ -1685,6 +1686,9 @@ export class VisualEngine {
     let idx = 0;
     const toRemove: string[] = [];
 
+    // Reset index map for this frame
+    this.nodeIndexMap.length = 0;
+
     this.nodes.forEach((node, id) => {
       node.life += deltaTime;
 
@@ -1768,6 +1772,9 @@ export class VisualEngine {
         const sizeBoost = isSelected ? 1.8 : (isHighlighted ? 1.4 : 1);
         sizes[idx] = node.size * (0.5 + alpha * 0.5) * sizeBoost * sizeMultiplier;
         alphas[idx] = alpha;
+
+        // Track node ID at this geometry index for raycasting
+        this.nodeIndexMap[idx] = id;
         idx++;
       }
     });
