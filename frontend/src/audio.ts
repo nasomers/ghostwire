@@ -501,7 +501,17 @@ export class AudioEngine {
   }
 
   private lastGlitchTime = 0;
-  private lastBreachTime = 0;
+
+  // Rate limiters for each event type to prevent polyphony overflow
+  private lastEventTime: Record<string, number> = {};
+
+  private throttleEvent(eventType: string, minIntervalMs: number): boolean {
+    const now = Tone.now() * 1000; // Convert to ms
+    const lastTime = this.lastEventTime[eventType] || 0;
+    if (now - lastTime < minIntervalMs) return false;
+    this.lastEventTime[eventType] = now;
+    return true;
+  }
 
   private triggerGlitch(intensity: number = 0.5) {
     if (!this.initialized) return;
@@ -536,8 +546,9 @@ export class AudioEngine {
   // === URLhaus - Malware URLs ===
   playMalwareUrl(hit: URLhausHit) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('malware', 100)) return; // 1 note spectralSynth
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(hit.url || hit.host);
       const threat = hit.threat?.toLowerCase() || 'malware';
 
@@ -568,8 +579,9 @@ export class AudioEngine {
   // === DShield - Honeypot Attacks ===
   playHoneypotAttack(attack: DShieldAttack) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('honeypot', 80)) return;
     try {
-      const now = Tone.now() + 0.01;
+      const now = Tone.now() + 0.02;
       const attackType = attack.attackType || 'scan';
 
       this.addTension(0.8);
@@ -599,8 +611,9 @@ export class AudioEngine {
   // === Feodo - Botnet C2 ===
   playBotnetC2(c2: FeodoC2) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('c2', 120)) return; // 2 notes c2Pulse
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(c2.ip);
       const malware = c2.malware?.toLowerCase() || '';
 
@@ -634,8 +647,9 @@ export class AudioEngine {
   // === RansomWatch - Ransomware Victims ===
   playRansomwareVictim(victim: RansomwareVictim) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('ransomware', 200)) return; // 3-note chord on ransomDrone (12 poly)
     try {
-      const now = Tone.now() + 0.05; // Larger offset to ensure future scheduling
+      const now = Tone.now() + 0.05;
 
       // Maximum tension
       this.addTension(5);
@@ -674,8 +688,9 @@ export class AudioEngine {
   // === OpenPhish - Phishing URLs ===
   playPhishing(phish: PhishingURL) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('phishing', 100)) return;
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(phish.domain);
 
       this.addTension(0.6);
@@ -703,8 +718,9 @@ export class AudioEngine {
   // === SSLBL - Malicious Certificates ===
   playMaliciousCert(entry: SSLBlacklistEntry) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('cert', 100)) return;
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(entry.sha1 || entry.malware);
 
       this.addTension(0.8);
@@ -726,8 +742,9 @@ export class AudioEngine {
   // === Blocklist.de - Brute Force Attacks ===
   playBruteforce(attack: BruteforceAttack) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('bruteforce', 80)) return;
     try {
-      const now = Tone.now() + 0.01;
+      const now = Tone.now() + 0.02;
       const attackType = attack.attackType || 'generic';
 
       this.addTension(1);
@@ -756,8 +773,9 @@ export class AudioEngine {
   // === Tor - Dark Web Exit Nodes ===
   playTorNode(node: TorExitNode) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('tor', 150)) return; // torWhisper + ghostPad (16 poly)
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(node.fingerprint);
 
       // Tor is ambient, mysterious - less tension
@@ -862,14 +880,9 @@ export class AudioEngine {
   // === HIBP - Data Breach ===
   playBreach(breach: HIBPBreach) {
     if (!this.initialized) return;
-
-    // Rate limit - each breach uses 4 spectralSynth notes, throttle to prevent polyphony overflow
-    const currentTime = Tone.now();
-    if (currentTime - this.lastBreachTime < 0.15) return;
-    this.lastBreachTime = currentTime;
-
+    if (!this.throttleEvent('breach', 150)) return; // 4 notes spectralSynth (32 poly)
     try {
-      const now = currentTime + 0.02;
+      const now = Tone.now() + 0.02;
       const params = hashToParams(breach.name);
 
       // Breaches are catastrophic - high tension
@@ -910,8 +923,9 @@ export class AudioEngine {
   // === Spamhaus - Hijacked IP Range ===
   playSpamhaus(drop: SpamhausDrop) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('spamhaus', 120)) return;
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(drop.cidr);
 
       // Network hijacking - medium-high tension
@@ -945,8 +959,9 @@ export class AudioEngine {
   // === BGP Event - Route Hijack/Leak ===
   playBGPEvent(bgpEvent: BGPEvent) {
     if (!this.initialized) return;
+    if (!this.throttleEvent('bgp', 150)) return;
     try {
-      const now = Tone.now();
+      const now = Tone.now() + 0.02;
       const params = hashToParams(bgpEvent.prefix);
 
       // Tension based on severity
