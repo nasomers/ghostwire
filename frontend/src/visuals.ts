@@ -181,9 +181,9 @@ export class VisualEngine {
 
     this.bloomPass = new UnrealBloomPass(
       bloomResolution,
-      this.isMobileDevice ? 1.0 : 1.5,   // strength (lower on mobile)
-      this.isMobileDevice ? 0.3 : 0.4,   // radius
-      0.85   // threshold
+      this.isMobileDevice ? 1.2 : 2.0,   // strength - stronger bloom
+      this.isMobileDevice ? 0.4 : 0.6,   // radius - wider glow
+      0.3   // threshold - lower = more things bloom
     );
     this.composer.addPass(this.bloomPass);
 
@@ -275,9 +275,10 @@ export class VisualEngine {
       positions[i * 3] = n.position.x;
       positions[i * 3 + 1] = n.position.y;
       positions[i * 3 + 2] = n.position.z;
-      colors[i * 3] = 0.6;
-      colors[i * 3 + 1] = 0.8;
-      colors[i * 3 + 2] = 1.0;
+      // Vibrant cyan/teal neurons
+      colors[i * 3] = 0.2;     // R - slight red for warmth
+      colors[i * 3 + 1] = 0.9; // G - strong green
+      colors[i * 3 + 2] = 1.0; // B - full blue
       sizes[i] = n.baseSize;
       brightness[i] = n.brightness;
     }
@@ -358,14 +359,13 @@ export class VisualEngine {
         positions[idx * 6 + 4] = target.position.y;
         positions[idx * 6 + 5] = target.position.z;
 
-        // Dim base color
-        const baseColor = 0.08;
-        colors[idx * 6] = baseColor;
-        colors[idx * 6 + 1] = baseColor * 1.2;
-        colors[idx * 6 + 2] = baseColor * 1.5;
-        colors[idx * 6 + 3] = baseColor;
-        colors[idx * 6 + 4] = baseColor * 1.2;
-        colors[idx * 6 + 5] = baseColor * 1.5;
+        // Very dim teal color - axons should be subtle
+        colors[idx * 6] = 0.02;      // R
+        colors[idx * 6 + 1] = 0.06;  // G
+        colors[idx * 6 + 2] = 0.08;  // B
+        colors[idx * 6 + 3] = 0.02;
+        colors[idx * 6 + 4] = 0.06;
+        colors[idx * 6 + 5] = 0.08;
 
         idx++;
       }
@@ -395,7 +395,7 @@ export class VisualEngine {
 
         void main() {
           vec3 finalColor = vColor * (1.0 + tension * 0.5);
-          gl_FragColor = vec4(finalColor, 0.3 + tension * 0.2);
+          gl_FragColor = vec4(finalColor, 0.15 + tension * 0.1);
         }
       `,
       transparent: true,
