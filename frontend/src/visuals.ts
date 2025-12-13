@@ -2627,8 +2627,8 @@ export class VisualEngine {
         break;
 
       case 'zoom':
-        // Zoom into a specific node
-        if (this.zoomTarget) {
+        // Zoom into a specific node - verify target still exists in nodes
+        if (this.zoomTarget && this.nodes.has(this.zoomTarget.id)) {
           const zoomDistance = 30 + Math.sin(this.time * 0.5) * 5;
           targetPos.set(
             this.zoomTarget.position.x + 15,
@@ -2637,8 +2637,11 @@ export class VisualEngine {
           );
           targetLookAt.copy(this.zoomTarget.position);
         } else {
-          // Fallback to orbit if no target
+          // Target expired or invalid - return to orbit with fresh timer
+          this.zoomTarget = null;
           this.cameraMode = 'orbit';
+          this.cameraModeTimer = 0;
+          this.cameraModeDuration = 30 + Math.random() * 20;
         }
         break;
     }
