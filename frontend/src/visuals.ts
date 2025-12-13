@@ -829,6 +829,7 @@ export class VisualEngine {
     this.canvas = canvas;
     this.isMobileDevice = isMobile();
     this.particleCount = this.isMobileDevice ? 300 : 600;
+    this.maxFragments = this.isMobileDevice ? 8 : 20;  // Reduced on mobile
 
     // Labels
     this.labelContainer = document.createElement('div');
@@ -2959,7 +2960,6 @@ export class VisualEngine {
   // Public: Spawn event text fragment at periphery (for threat feed)
   spawnEventFragment(type: string, content: string, severity: 'critical' | 'high' | 'medium' | 'low' = 'medium', sourcePos?: THREE.Vector3) {
     if (this.dataFragments.length >= this.maxFragments) return;
-    if (this.isMobileDevice) return;
 
     // Severity colors
     const severityColors: Record<string, number> = {

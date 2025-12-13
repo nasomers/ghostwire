@@ -31,47 +31,36 @@
           <h1 class="glitch" data-text="GHOSTWIRE">GHOSTWIRE</h1>
           <p class="tagline">Real-time threat intelligence, rendered as art</p>
 
-          <!-- Compact source indicators -->
-          <div class="source-row">
-            <span class="source-dot malware" title="Malware"></span>
-            <span class="source-dot honeypot" title="Honeypots"></span>
-            <span class="source-dot c2" title="Botnets"></span>
-            <span class="source-dot ransomware" title="Ransomware"></span>
-            <span class="source-dot phishing" title="Phishing"></span>
-            <span class="source-dot tor" title="Dark Web"></span>
-            <span class="source-dot breach" title="Breaches"></span>
-            <span class="source-dot hijack" title="IP Hijacks"></span>
-            <span class="source-dot bgp" title="BGP Events"></span>
+          <p class="intro-description">
+            Every sound and visual represents real malicious activity happening now—
+            malware spreading, ransomware victims announced, botnets receiving commands,
+            attacks hitting honeypots worldwide.
+          </p>
+
+          <!-- Threat type indicators with labels -->
+          <div class="threat-grid">
+            <div class="threat-item"><span class="source-dot malware"></span><span>Malware</span></div>
+            <div class="threat-item"><span class="source-dot honeypot"></span><span>Honeypots</span></div>
+            <div class="threat-item"><span class="source-dot c2"></span><span>Botnets</span></div>
+            <div class="threat-item"><span class="source-dot ransomware"></span><span>Ransomware</span></div>
+            <div class="threat-item"><span class="source-dot phishing"></span><span>Phishing</span></div>
+            <div class="threat-item"><span class="source-dot tor"></span><span>Dark Web</span></div>
+            <div class="threat-item"><span class="source-dot breach"></span><span>Breaches</span></div>
+            <div class="threat-item"><span class="source-dot hijack"></span><span>IP Hijacks</span></div>
+            <div class="threat-item"><span class="source-dot bgp"></span><span>BGP Events</span></div>
           </div>
 
           <div class="start-section">
             <p id="status" class="status-text">Establishing connection...</p>
             <button id="start-btn" disabled>Enter</button>
-            <p class="audio-note">headphones recommended</p>
           </div>
 
-          <!-- Expandable about section -->
-          <details class="about-section">
-            <summary>What is this?</summary>
-            <div class="about-content">
-              <p>
-                Every sound and visual represents real malicious activity happening now—
-                malware spreading, ransomware victims announced, botnets receiving commands,
-                attacks hitting honeypots worldwide.
-              </p>
-              <div class="source-legend">
-                <div class="legend-item"><span class="source-dot malware"></span> Malware distribution</div>
-                <div class="legend-item"><span class="source-dot honeypot"></span> Honeypot attacks</div>
-                <div class="legend-item"><span class="source-dot c2"></span> Botnet C2 servers</div>
-                <div class="legend-item"><span class="source-dot ransomware"></span> Ransomware victims</div>
-                <div class="legend-item"><span class="source-dot phishing"></span> Phishing campaigns</div>
-                <div class="legend-item"><span class="source-dot tor"></span> Tor exit nodes</div>
-                <div class="legend-item"><span class="source-dot breach"></span> Data breaches</div>
-                <div class="legend-item"><span class="source-dot hijack"></span> IP hijacks</div>
-                <div class="legend-item"><span class="source-dot bgp"></span> BGP route attacks</div>
-              </div>
-            </div>
-          </details>
+          <div class="intro-footer">
+            <p class="audio-note">Headphones recommended for full experience</p>
+            <p class="device-note" id="device-note">
+              <!-- Populated by JS based on device detection -->
+            </p>
+          </div>
         </div>
       </div>
 

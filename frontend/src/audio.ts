@@ -178,8 +178,15 @@ type TextureMode = 'melody' | 'chords' | 'arps';
 
 // === AUDIO ENGINE ===
 
+// Mobile detection
+function isMobile(): boolean {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+    (window.innerWidth < 768);
+}
+
 export class AudioEngine {
   private initialized = false;
+  private isMobileDevice = false;
 
   // Master chain
   private masterGain!: Tone.Gain;
@@ -348,10 +355,22 @@ export class AudioEngine {
   async init() {
     if (this.initialized) return;
 
+    this.isMobileDevice = isMobile();
+
+    // Mobile: use larger buffer for stability
+    if (this.isMobileDevice) {
+      Tone.setContext(new Tone.Context({ latencyHint: 'playback' }));
+      console.log('[Audio] Mobile mode - reduced features for stability');
+    }
+
     await Tone.start();
     console.log('[Audio v5] Initializing generative music engine...');
 
     Tone.getTransport().bpm.value = this.bpm;
+
+    // Polyphony limits - much lower on mobile
+    const maxPoly = this.isMobileDevice ? 4 : 12;
+    const maxPolyLow = this.isMobileDevice ? 2 : 8;
 
     // === MASTER CHAIN ===
     this.masterComp = new Tone.Compressor({
@@ -404,20 +423,20 @@ export class AudioEngine {
 
     // Lead - clean, clear, slightly warm
     this.leadSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'triangle8' },
+      oscillator: { type: this.isMobileDevice ? 'triangle' : 'triangle8' },
       envelope: { attack: 0.02, decay: 0.3, sustain: 0.4, release: 0.6 },
       volume: -10,
     });
-    this.leadSynth.maxPolyphony = 12;
+    this.leadSynth.maxPolyphony = maxPoly;
     this.leadSynth.connect(this.chorus);
 
     // Pad - lush, sustained
     this.padSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine4' },
+      oscillator: { type: this.isMobileDevice ? 'sine' : 'sine4' },
       envelope: { attack: 1.5, decay: 2, sustain: 0.6, release: 3 },
       volume: -16,
     });
-    this.padSynth.maxPolyphony = 12;
+    this.padSynth.maxPolyphony = maxPoly;
     this.padSynth.connect(this.reverb);
 
     // Bass - deep, warm
@@ -442,7 +461,7 @@ export class AudioEngine {
       envelope: { attack: 0.01, decay: 0.15, sustain: 0.1, release: 0.3 },
       volume: -14,
     });
-    this.arpSynth.maxPolyphony = 24;
+    this.arpSynth.maxPolyphony = this.isMobileDevice ? 6 : 24;
     this.arpSynth.connect(this.delay);
 
     // Bell - glassy
@@ -451,7 +470,7 @@ export class AudioEngine {
       envelope: { attack: 0.001, decay: 1.5, sustain: 0, release: 1 },
       volume: -18,
     });
-    this.bellSynth.maxPolyphony = 16;
+    this.bellSynth.maxPolyphony = maxPoly;
     this.bellSynth.connect(this.reverb);
 
     // Pluck
@@ -470,7 +489,7 @@ export class AudioEngine {
       envelope: { attack: 4, decay: 3, sustain: 0.5, release: 6 },
       volume: -22,
     });
-    this.droneSynth.maxPolyphony = 4;
+    this.droneSynth.maxPolyphony = maxPolyLow;
     this.droneSynth.connect(this.reverb);
 
     // Enhanced noise floor with filter and LFO modulation
@@ -674,153 +693,157 @@ export class AudioEngine {
     this.tensionDroneLFO.connect(this.tensionDroneGain.gain);
     this.tensionDroneLFO.start();
 
-    // === EVOLVING BASS ===
-    // Continuous modulating bassline that evolves with activity
-    this.evolvingBassGain = new Tone.Gain(0);
-    this.evolvingBassGain.connect(this.masterComp);
+    // === DESKTOP-ONLY HEAVY LAYERS ===
+    // These are skipped on mobile for performance
+    if (!this.isMobileDevice) {
+      // === EVOLVING BASS ===
+      // Continuous modulating bassline that evolves with activity
+      this.evolvingBassGain = new Tone.Gain(0);
+      this.evolvingBassGain.connect(this.masterComp);
 
-    this.evolvingBassFilter = new Tone.Filter({
-      frequency: 200,
-      type: 'lowpass',
-      rolloff: -24,
-      Q: 3,
-    });
-    this.evolvingBassFilter.connect(this.evolvingBassGain);
-
-    this.evolvingBass = new Tone.MonoSynth({
-      oscillator: { type: 'sawtooth' },
-      envelope: { attack: 0.1, decay: 0.4, sustain: 0.6, release: 0.8 },
-      filterEnvelope: {
-        attack: 0.05,
-        decay: 0.3,
-        sustain: 0.4,
-        release: 0.5,
-        baseFrequency: 60,
-        octaves: 2.5,
-      },
-      volume: -4,
-    });
-    this.evolvingBass.connect(this.evolvingBassFilter);
-
-    // LFO modulates filter for that classic evolving sound
-    this.evolvingBassLFO = new Tone.LFO({
-      frequency: 0.15, // Slow wobble
-      min: 100,
-      max: 600,
-    });
-    this.evolvingBassLFO.connect(this.evolvingBassFilter.frequency);
-    this.evolvingBassLFO.start();
-
-    // === SHARD RAIN LAYER ===
-    // Ambient reactive texture - tiny high-pitched drops
-    this.shardReverb = new Tone.Reverb({
-      decay: 4,
-      wet: 0.7,
-      preDelay: 0.1,
-    });
-    await this.shardReverb.ready;
-    this.shardReverb.connect(this.masterComp);
-
-    this.shardGain = new Tone.Gain(0.15);
-    this.shardGain.connect(this.shardReverb);
-
-    this.shardDelay = new Tone.PingPongDelay({
-      delayTime: '8n.',
-      feedback: 0.3,
-      wet: 0.4,
-    });
-    this.shardDelay.connect(this.shardGain);
-
-    this.shardFilter = new Tone.Filter({
-      type: 'highpass',
-      frequency: 2000,
-      Q: 1,
-    });
-    this.shardFilter.connect(this.shardDelay);
-
-    this.shardSynth = new Tone.PolySynth(Tone.Synth, {
-      oscillator: { type: 'sine' },
-      envelope: {
-        attack: 0.002,
-        decay: 0.1,
-        sustain: 0,
-        release: 0.3,
-      },
-      volume: -12,
-    });
-    this.shardSynth.maxPolyphony = 16;
-    this.shardSynth.connect(this.shardFilter);
-
-    // === VOICE CHOIR SYSTEM ===
-    // Layered pads with formant filtering for voice-like quality
-    this.voiceReverb = new Tone.Reverb({
-      decay: 6,
-      wet: 0.6,
-      preDelay: 0.2,
-    });
-    await this.voiceReverb.ready;
-    this.voiceReverb.connect(this.masterComp);
-
-    this.voiceChorus = new Tone.Chorus({
-      frequency: 0.5,
-      delayTime: 3.5,
-      depth: 0.4,
-      wet: 0.3,
-    });
-    this.voiceChorus.connect(this.voiceReverb);
-    this.voiceChorus.start();
-
-    // Formant frequencies for vowel sounds (Hz)
-    // 'ah' sound: F1=800, F2=1200
-    const createVoice = (octaveOffset: number, formant1: number, formant2: number) => {
-      const gain = new Tone.Gain(0);
-      gain.connect(this.voiceChorus);
-
-      const filter2 = new Tone.Filter({ type: 'bandpass', frequency: formant2, Q: 5 });
-      filter2.connect(gain);
-
-      const filter1 = new Tone.Filter({ type: 'bandpass', frequency: formant1, Q: 8 });
-      filter1.connect(filter2);
-
-      const synth = new Tone.MonoSynth({
-        oscillator: { type: 'sawtooth8' },
-        envelope: { attack: 2, decay: 1, sustain: 0.7, release: 4 },
-        filterEnvelope: { attack: 1, decay: 0.5, sustain: 0.8, release: 3, baseFrequency: 200, octaves: 2 },
-        volume: -8,
+      this.evolvingBassFilter = new Tone.Filter({
+        frequency: 200,
+        type: 'lowpass',
+        rolloff: -24,
+        Q: 3,
       });
-      synth.connect(filter1);
+      this.evolvingBassFilter.connect(this.evolvingBassGain);
 
-      // Slow vibrato
-      const vibrato = new Tone.LFO({ frequency: 4 + Math.random() * 2, min: -10, max: 10 });
-      vibrato.connect(synth.detune);
-      vibrato.start();
+      this.evolvingBass = new Tone.MonoSynth({
+        oscillator: { type: 'sawtooth' },
+        envelope: { attack: 0.1, decay: 0.4, sustain: 0.6, release: 0.8 },
+        filterEnvelope: {
+          attack: 0.05,
+          decay: 0.3,
+          sustain: 0.4,
+          release: 0.5,
+          baseFrequency: 60,
+          octaves: 2.5,
+        },
+        volume: -4,
+      });
+      this.evolvingBass.connect(this.evolvingBassFilter);
 
-      return { synth, filter1, filter2, gain, vibrato };
-    };
+      // LFO modulates filter for that classic evolving sound
+      this.evolvingBassLFO = new Tone.LFO({
+        frequency: 0.15, // Slow wobble
+        min: 100,
+        max: 600,
+      });
+      this.evolvingBassLFO.connect(this.evolvingBassFilter.frequency);
+      this.evolvingBassLFO.start();
 
-    // Low voice (bass) - deeper formants
-    const lowVoice = createVoice(0, 600, 1000);
-    this.voiceLow = lowVoice.synth;
-    this.voiceFilterLow1 = lowVoice.filter1;
-    this.voiceFilterLow2 = lowVoice.filter2;
-    this.voiceGainLow = lowVoice.gain;
-    this.voiceVibratoLow = lowVoice.vibrato;
+      // === SHARD RAIN LAYER ===
+      // Ambient reactive texture - tiny high-pitched drops
+      this.shardReverb = new Tone.Reverb({
+        decay: 4,
+        wet: 0.7,
+        preDelay: 0.1,
+      });
+      await this.shardReverb.ready;
+      this.shardReverb.connect(this.masterComp);
 
-    // Mid voice (tenor) - mid formants
-    const midVoice = createVoice(1, 800, 1200);
-    this.voiceMid = midVoice.synth;
-    this.voiceFilterMid1 = midVoice.filter1;
-    this.voiceFilterMid2 = midVoice.filter2;
-    this.voiceGainMid = midVoice.gain;
-    this.voiceVibratoMid = midVoice.vibrato;
+      this.shardGain = new Tone.Gain(0.15);
+      this.shardGain.connect(this.shardReverb);
 
-    // High voice (soprano) - higher formants
-    const highVoice = createVoice(2, 1000, 1400);
-    this.voiceHigh = highVoice.synth;
-    this.voiceFilterHigh1 = highVoice.filter1;
-    this.voiceFilterHigh2 = highVoice.filter2;
-    this.voiceGainHigh = highVoice.gain;
-    this.voiceVibratoHigh = highVoice.vibrato;
+      this.shardDelay = new Tone.PingPongDelay({
+        delayTime: '8n.',
+        feedback: 0.3,
+        wet: 0.4,
+      });
+      this.shardDelay.connect(this.shardGain);
+
+      this.shardFilter = new Tone.Filter({
+        type: 'highpass',
+        frequency: 2000,
+        Q: 1,
+      });
+      this.shardFilter.connect(this.shardDelay);
+
+      this.shardSynth = new Tone.PolySynth(Tone.Synth, {
+        oscillator: { type: 'sine' },
+        envelope: {
+          attack: 0.002,
+          decay: 0.1,
+          sustain: 0,
+          release: 0.3,
+        },
+        volume: -12,
+      });
+      this.shardSynth.maxPolyphony = 16;
+      this.shardSynth.connect(this.shardFilter);
+
+      // === VOICE CHOIR SYSTEM ===
+      // Layered pads with formant filtering for voice-like quality
+      this.voiceReverb = new Tone.Reverb({
+        decay: 6,
+        wet: 0.6,
+        preDelay: 0.2,
+      });
+      await this.voiceReverb.ready;
+      this.voiceReverb.connect(this.masterComp);
+
+      this.voiceChorus = new Tone.Chorus({
+        frequency: 0.5,
+        delayTime: 3.5,
+        depth: 0.4,
+        wet: 0.3,
+      });
+      this.voiceChorus.connect(this.voiceReverb);
+      this.voiceChorus.start();
+
+      // Formant frequencies for vowel sounds (Hz)
+      // 'ah' sound: F1=800, F2=1200
+      const createVoice = (octaveOffset: number, formant1: number, formant2: number) => {
+        const gain = new Tone.Gain(0);
+        gain.connect(this.voiceChorus);
+
+        const filter2 = new Tone.Filter({ type: 'bandpass', frequency: formant2, Q: 5 });
+        filter2.connect(gain);
+
+        const filter1 = new Tone.Filter({ type: 'bandpass', frequency: formant1, Q: 8 });
+        filter1.connect(filter2);
+
+        const synth = new Tone.MonoSynth({
+          oscillator: { type: 'sawtooth8' },
+          envelope: { attack: 2, decay: 1, sustain: 0.7, release: 4 },
+          filterEnvelope: { attack: 1, decay: 0.5, sustain: 0.8, release: 3, baseFrequency: 200, octaves: 2 },
+          volume: -8,
+        });
+        synth.connect(filter1);
+
+        // Slow vibrato
+        const vibrato = new Tone.LFO({ frequency: 4 + Math.random() * 2, min: -10, max: 10 });
+        vibrato.connect(synth.detune);
+        vibrato.start();
+
+        return { synth, filter1, filter2, gain, vibrato };
+      };
+
+      // Low voice (bass) - deeper formants
+      const lowVoice = createVoice(0, 600, 1000);
+      this.voiceLow = lowVoice.synth;
+      this.voiceFilterLow1 = lowVoice.filter1;
+      this.voiceFilterLow2 = lowVoice.filter2;
+      this.voiceGainLow = lowVoice.gain;
+      this.voiceVibratoLow = lowVoice.vibrato;
+
+      // Mid voice (tenor) - mid formants
+      const midVoice = createVoice(1, 800, 1200);
+      this.voiceMid = midVoice.synth;
+      this.voiceFilterMid1 = midVoice.filter1;
+      this.voiceFilterMid2 = midVoice.filter2;
+      this.voiceGainMid = midVoice.gain;
+      this.voiceVibratoMid = midVoice.vibrato;
+
+      // High voice (soprano) - higher formants
+      const highVoice = createVoice(2, 1000, 1400);
+      this.voiceHigh = highVoice.synth;
+      this.voiceFilterHigh1 = highVoice.filter1;
+      this.voiceFilterHigh2 = highVoice.filter2;
+      this.voiceGainHigh = highVoice.gain;
+      this.voiceVibratoHigh = highVoice.vibrato;
+    }
 
     // Start transport
     Tone.getTransport().start();
@@ -1688,6 +1711,8 @@ export class AudioEngine {
   }
 
   private updateEvolvingBass(now: number) {
+    if (this.isMobileDevice) return; // Disabled on mobile
+
     // Evolving bass becomes active when there's any activity
     const targetGain = this.activity > 0.05 ? 0.25 + this.tension * 0.4 : 0;
     this.evolvingBassGain.gain.rampTo(targetGain, 1.5);
@@ -1786,6 +1811,8 @@ export class AudioEngine {
   // === SHARD RAIN METHODS ===
 
   private updateShardRain(now: number) {
+    if (this.isMobileDevice) return; // Disabled on mobile
+
     // Update density based on activity (0.1 to 0.9)
     this.shardDensity = 0.1 + this.activity * 0.6 + this.tension * 0.2;
 
@@ -1887,6 +1914,8 @@ export class AudioEngine {
   // === VOICE CHOIR METHODS ===
 
   private updateVoiceChoir(now: number) {
+    if (this.isMobileDevice) return; // Disabled on mobile
+
     // Voice intensity decays slowly
     this.voiceIntensity = Math.max(0, this.voiceIntensity - 0.001);
 
@@ -1955,7 +1984,7 @@ export class AudioEngine {
 
   // Trigger voice swell - called by events
   playVoiceSwell() {
-    if (!this.initialized) return;
+    if (!this.initialized || this.isMobileDevice) return;
     console.log('[Audio] Voice swell');
 
     // Boost intensity
@@ -2679,41 +2708,44 @@ export class AudioEngine {
     this.tensionDroneGain.dispose();
     this.tensionDroneLFO.dispose();
 
-    // Dispose evolving bass
-    this.evolvingBassLFO.stop();
-    this.evolvingBass.dispose();
-    this.evolvingBassFilter.dispose();
-    this.evolvingBassLFO.dispose();
-    this.evolvingBassGain.dispose();
+    // Dispose desktop-only layers (not initialized on mobile)
+    if (!this.isMobileDevice) {
+      // Dispose evolving bass
+      this.evolvingBassLFO.stop();
+      this.evolvingBass.dispose();
+      this.evolvingBassFilter.dispose();
+      this.evolvingBassLFO.dispose();
+      this.evolvingBassGain.dispose();
 
-    // Dispose shard rain
-    this.shardSynth.dispose();
-    this.shardFilter.dispose();
-    this.shardDelay.dispose();
-    this.shardGain.dispose();
-    this.shardReverb.dispose();
+      // Dispose shard rain
+      this.shardSynth.dispose();
+      this.shardFilter.dispose();
+      this.shardDelay.dispose();
+      this.shardGain.dispose();
+      this.shardReverb.dispose();
 
-    // Dispose voice choir
-    this.voiceVibratoLow.stop();
-    this.voiceVibratoMid.stop();
-    this.voiceVibratoHigh.stop();
-    this.voiceLow.dispose();
-    this.voiceMid.dispose();
-    this.voiceHigh.dispose();
-    this.voiceFilterLow1.dispose();
-    this.voiceFilterLow2.dispose();
-    this.voiceFilterMid1.dispose();
-    this.voiceFilterMid2.dispose();
-    this.voiceFilterHigh1.dispose();
-    this.voiceFilterHigh2.dispose();
-    this.voiceGainLow.dispose();
-    this.voiceGainMid.dispose();
-    this.voiceGainHigh.dispose();
-    this.voiceVibratoLow.dispose();
-    this.voiceVibratoMid.dispose();
-    this.voiceVibratoHigh.dispose();
-    this.voiceChorus.dispose();
-    this.voiceReverb.dispose();
+      // Dispose voice choir
+      this.voiceVibratoLow.stop();
+      this.voiceVibratoMid.stop();
+      this.voiceVibratoHigh.stop();
+      this.voiceLow.dispose();
+      this.voiceMid.dispose();
+      this.voiceHigh.dispose();
+      this.voiceFilterLow1.dispose();
+      this.voiceFilterLow2.dispose();
+      this.voiceFilterMid1.dispose();
+      this.voiceFilterMid2.dispose();
+      this.voiceFilterHigh1.dispose();
+      this.voiceFilterHigh2.dispose();
+      this.voiceGainLow.dispose();
+      this.voiceGainMid.dispose();
+      this.voiceGainHigh.dispose();
+      this.voiceVibratoLow.dispose();
+      this.voiceVibratoMid.dispose();
+      this.voiceVibratoHigh.dispose();
+      this.voiceChorus.dispose();
+      this.voiceReverb.dispose();
+    }
 
     this.reverb.dispose();
     this.delay.dispose();

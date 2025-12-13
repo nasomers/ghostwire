@@ -1087,10 +1087,38 @@ function init() {
   setInterval(updateFeedTimestamps, 10000);
 }
 
+// Mobile detection
+function isMobile(): boolean {
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+    (window.innerWidth < 768);
+}
+
+// Populate device-specific messaging
+function setupDeviceNote() {
+  const deviceNote = document.getElementById('device-note');
+  if (!deviceNote) return;
+
+  if (isMobile()) {
+    deviceNote.className = 'device-note mobile';
+    deviceNote.innerHTML = `
+      <strong>Mobile mode:</strong> Some audio layers are simplified for performance.
+      For the full experience with rich ambient textures and voice choirs, visit on desktop.
+    `;
+  } else {
+    deviceNote.className = 'device-note desktop';
+    deviceNote.innerHTML = `
+      <strong>Desktop mode:</strong> Full audio and visual experience enabled.
+    `;
+  }
+}
+
 // Start on DOM ready
 function bootstrap() {
   // Hide boot screen initially (will show after Enter click)
   bootScreen.classList.add('hidden');
+
+  // Set up device-specific messaging
+  setupDeviceNote();
 
   // Initialize main app
   init();
