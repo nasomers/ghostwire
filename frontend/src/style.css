@@ -1277,8 +1277,14 @@ body {
    ============================================ */
 
 @media (max-width: 600px) {
+  #overlay {
+    align-items: flex-start;
+    padding: 20px 15px 40px;
+  }
+
   .intro-content {
     padding: 0 10px;
+    margin: auto;
   }
 
   .glitch {
@@ -1287,6 +1293,15 @@ body {
 
   .intro-description {
     padding: 1rem;
+  }
+
+  #boot-screen {
+    padding: 20px;
+    padding-bottom: 60px;
+  }
+
+  .boot-terminal {
+    font-size: 12px;
   }
 
   #stats {

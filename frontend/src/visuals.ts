@@ -2340,9 +2340,6 @@ export class VisualEngine {
     console.log(`[Visual] Morph targets calculated for ${formationName}`);
   }
 
-  private updateGlitchIntensity() {
-  }
-
   // === UPDATE ===
 
   update(deltaTime: number) {
@@ -2379,9 +2376,6 @@ export class VisualEngine {
 
     // Update labels
     this.updateLabels(deltaTime);
-
-    // Update glitch intensity based on tension
-    this.updateGlitchIntensity();
 
     // Update trails
     this.updateTrails(deltaTime);

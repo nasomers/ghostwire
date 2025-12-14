@@ -551,8 +551,9 @@ async function runBootSequence(): Promise<void> {
       lineEl.textContent = line.text;
       bootOutput.appendChild(lineEl);
 
-      // Auto-scroll to bottom
+      // Auto-scroll to bottom (scroll both the output and the parent container for mobile)
       bootOutput.scrollTop = bootOutput.scrollHeight;
+      bootScreen.scrollTop = bootScreen.scrollHeight;
     }
 
     // Small delay before hiding
