@@ -767,7 +767,7 @@ export class VisualEngine {
   private hudPanels: HUDPanel[] = [];
   private hudGroup: THREE.Group = new THREE.Group();
   private hudStats: Record<string, string | number> = {
-    threatLevel: 1,
+    totalEvents: 0,
     ransomware: 0,
     eventsPerMin: 0,
     breaches: '0',
@@ -1935,7 +1935,7 @@ export class VisualEngine {
   private initHUD() {
     // Create HUD panels for key stats - orbital scatter positioning
     const panelConfigs = [
-      { id: 'threatLevel', label: 'THREAT LEVEL', orbitAngle: -0.4, orbitRadius: 180, orbitHeight: 60 },
+      { id: 'totalEvents', label: 'TOTAL EVENTS', orbitAngle: -0.4, orbitRadius: 180, orbitHeight: 60 },
       { id: 'ransomware', label: 'RANSOMWARE', orbitAngle: 0.3, orbitRadius: 190, orbitHeight: 40 },
       { id: 'eventsPerMin', label: 'EVENTS/MIN', orbitAngle: 0.9, orbitRadius: 175, orbitHeight: -30 },
       { id: 'breaches', label: 'BREACHES', orbitAngle: -1.0, orbitRadius: 185, orbitHeight: -50 },
@@ -2061,9 +2061,7 @@ export class VisualEngine {
 
     // Value - crisp text with dark stroke for contrast
     let displayValue: string;
-    if (panel.id === 'threatLevel') {
-      displayValue = `LEVEL ${value}`;
-    } else if (typeof value === 'number') {
+    if (typeof value === 'number') {
       displayValue = value.toLocaleString();
     } else {
       displayValue = String(value);
@@ -2132,8 +2130,8 @@ export class VisualEngine {
   }
 
   // Public method to update HUD stats from main.ts
-  updateHUDStats(stats: { threatLevel?: number; ransomware?: number; eventsPerMin?: number; breaches?: string }) {
-    if (stats.threatLevel !== undefined) this.hudStats.threatLevel = stats.threatLevel;
+  updateHUDStats(stats: { totalEvents?: number; ransomware?: number; eventsPerMin?: number; breaches?: string }) {
+    if (stats.totalEvents !== undefined) this.hudStats.totalEvents = stats.totalEvents;
     if (stats.ransomware !== undefined) this.hudStats.ransomware = stats.ransomware;
     if (stats.eventsPerMin !== undefined) this.hudStats.eventsPerMin = stats.eventsPerMin;
     if (stats.breaches !== undefined) this.hudStats.breaches = stats.breaches;

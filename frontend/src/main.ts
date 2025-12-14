@@ -904,8 +904,11 @@ function updateStats() {
   if (statsEventRate) statsEventRate.textContent = stats.tension.toFixed(2);
 
   // Update 3D holographic HUD
-  // Calculate threat level (1-5) based on tension
-  const threatLevel = Math.max(1, Math.min(5, Math.ceil(stats.tension * 5)));
+  // Calculate total events across all feeds
+  const totalEvents = eventCounts.urlhaus + eventCounts.dshield + eventCounts.feodo +
+    eventCounts.ransomware + eventCounts.phishing + eventCounts.sslbl +
+    eventCounts.bruteforce + eventCounts.tor + eventCounts.hibp +
+    eventCounts.spamhaus + eventCounts.bgp;
 
   // Events per minute
   const eventsPerMin = eventTimestamps.length;
@@ -923,7 +926,7 @@ function updateStats() {
   }
 
   visuals.updateHUDStats({
-    threatLevel,
+    totalEvents,
     ransomware: eventCounts.ransomware,
     eventsPerMin,
     breaches: breachesDisplay,
