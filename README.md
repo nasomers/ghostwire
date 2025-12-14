@@ -22,6 +22,31 @@ Ghostwire transforms live cybersecurity threat data into an immersive audiovisua
 **Backend:** Bun, TypeScript, Fly.io
 **Frontend:** Vite, Three.js, Tone.js, TypeScript, Cloudflare Pages
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                       Frontend                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌────────────────┐  │
+│  │  Three.js   │  │   Tone.js   │  │  UI & Events   │  │
+│  │  (Visuals)  │  │   (Audio)   │  │                │  │
+│  └─────────────┘  └─────────────┘  └────────────────┘  │
+│                           │                             │
+│                    WebSocket (wss://)                   │
+└───────────────────────────┼─────────────────────────────┘
+                            │
+┌───────────────────────────┼─────────────────────────────┐
+│                       Backend                           │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │              Bun WebSocket Server                 │  │
+│  │         Event Aggregation & Processing            │  │
+│  └──────────────────────────────────────────────────┘  │
+│                           │                             │
+│                  Threat Intelligence                    │
+│                        Sources                          │
+└─────────────────────────────────────────────────────────┘
+```
+
 ---
 
 ## Local Development
