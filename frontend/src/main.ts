@@ -1,6 +1,13 @@
 // Ghostwire - Main Entry Point
 // Generative audiovisual art from internet threat data
 
+// Disable console logging in production
+if (import.meta.env.PROD) {
+  console.log = () => {};
+  console.warn = () => {};
+  console.info = () => {};
+}
+
 import {
   GhostwireSocket,
   type URLhausHit,
