@@ -1278,13 +1278,16 @@ body {
 
 @media (max-width: 600px) {
   #overlay {
+    position: fixed;
     align-items: flex-start;
-    padding: 20px 15px 40px;
+    justify-content: flex-start;
+    padding: 20px 15px 60px;
+    -webkit-overflow-scrolling: touch;
   }
 
   .intro-content {
     padding: 0 10px;
-    margin: auto;
+    flex-shrink: 0;
   }
 
   .glitch {
