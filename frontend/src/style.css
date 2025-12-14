@@ -1283,15 +1283,24 @@ body {
     justify-content: flex-start;
     padding: 20px 15px 60px;
     -webkit-overflow-scrolling: touch;
+    overflow-x: hidden;
   }
 
   .intro-content {
     padding: 0 10px;
     flex-shrink: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
   }
 
   .glitch {
-    letter-spacing: 0.15em;
+    letter-spacing: 0.1em;
+    word-break: break-word;
+  }
+
+  .threat-grid {
+    max-width: 100%;
   }
 
   .intro-description {
